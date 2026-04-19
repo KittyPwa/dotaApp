@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.data
+.run
+app/backend/.data
+app/frontend/dist
+*.tsbuildinfo

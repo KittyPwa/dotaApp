@@ -1,0 +1,173 @@
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+
+export const players = sqliteTable("players", {
+  id: integer("id").primaryKey(),
+  personaname: text("personaname"),
+  avatar: text("avatar"),
+  profileUrl: text("profile_url"),
+  countryCode: text("country_code"),
+  providerSource: text("provider_source").notNull().default("opendota"),
+  lastProfileFetchedAt: integer("last_profile_fetched_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
+export const heroes = sqliteTable("heroes", {
+  id: integer("id").primaryKey(),
+  name: text("name").notNull(),
+  localizedName: text("localized_name").notNull(),
+  iconPath: text("icon_path"),
+  portraitPath: text("portrait_path"),
+  primaryAttr: text("primary_attr"),
+  attackType: text("attack_type"),
+  rolesJson: text("roles_json"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
+export const matches = sqliteTable("matches", {
+  id: integer("id").primaryKey(),
+  startTime: integer("start_time", { mode: "timestamp_ms" }),
+  durationSeconds: integer("duration_seconds"),
+  radiantWin: integer("radiant_win", { mode: "boolean" }),
+  radiantScore: integer("radiant_score"),
+  direScore: integer("dire_score"),
+  patchId: integer("patch_id"),
+  leagueId: integer("league_id"),
+  providerSource: text("provider_source").notNull().default("opendota"),
+  lastFetchedAt: integer("last_fetched_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
+export const matchPlayers = sqliteTable(
+  "match_players",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    matchId: integer("match_id").notNull().references(() => matches.id, { onDelete: "cascade" }),
+    playerId: integer("player_id").references(() => players.id, { onDelete: "set null" }),
+    heroId: integer("hero_id").references(() => heroes.id, { onDelete: "set null" }),
+    playerSlot: integer("player_slot"),
+    isRadiant: integer("is_radiant", { mode: "boolean" }).notNull(),
+    win: integer("win", { mode: "boolean" }),
+    kills: integer("kills"),
+    deaths: integer("deaths"),
+    assists: integer("assists"),
+    netWorth: integer("net_worth"),
+    gpm: integer("gpm"),
+    xpm: integer("xpm"),
+    heroDamage: integer("hero_damage"),
+    towerDamage: integer("tower_damage"),
+    lastHits: integer("last_hits"),
+    denies: integer("denies"),
+    level: integer("level"),
+    laneRole: integer("lane_role"),
+    gameMode: integer("game_mode"),
+    item0: integer("item_0"),
+    item1: integer("item_1"),
+    item2: integer("item_2"),
+    item3: integer("item_3"),
+    item4: integer("item_4"),
+    item5: integer("item_5"),
+    backpack0: integer("backpack_0"),
+    backpack1: integer("backpack_1"),
+    backpack2: integer("backpack_2"),
+    firstPurchaseTimeJson: text("first_purchase_time_json"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`)
+  },
+  (table) => ({
+    uniqueByMatchSlot: uniqueIndex("match_players_match_player_unique").on(table.matchId, table.playerSlot)
+  })
+);
+
+export const items = sqliteTable("items", {
+  id: integer("id").primaryKey(),
+  name: text("name").notNull(),
+  localizedName: text("localized_name").notNull(),
+  imagePath: text("image_path"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
+export const patches = sqliteTable("patches", {
+  id: integer("id").primaryKey(),
+  name: text("name").notNull(),
+  releaseDate: integer("release_date", { mode: "timestamp_ms" })
+});
+
+export const leagues = sqliteTable("leagues", {
+  id: integer("id").primaryKey(),
+  name: text("name").notNull()
+});
+
+export const drafts = sqliteTable("drafts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  matchId: integer("match_id").notNull().references(() => matches.id, { onDelete: "cascade" }),
+  heroId: integer("hero_id").notNull().references(() => heroes.id, { onDelete: "cascade" }),
+  team: text("team").notNull(),
+  isPick: integer("is_pick", { mode: "boolean" }).notNull(),
+  orderIndex: integer("order_index").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
+export const rawApiPayloads = sqliteTable(
+  "raw_api_payloads",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    provider: text("provider").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    fetchedAt: integer("fetched_at", { mode: "timestamp_ms" }).notNull(),
+    rawJson: text("raw_json").notNull(),
+    parseVersion: text("parse_version").notNull().default("v1"),
+    requestContext: text("request_context")
+  },
+  (table) => ({
+    lookupIdx: index("raw_api_payloads_lookup_idx").on(table.provider, table.entityType, table.entityId)
+  })
+);
+
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value"),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
+export const schema = {
+  players,
+  heroes,
+  matches,
+  matchPlayers,
+  items,
+  patches,
+  leagues,
+  drafts,
+  rawApiPayloads,
+  settings
+};
