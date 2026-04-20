@@ -2,6 +2,14 @@ import { z } from "zod";
 
 export const cacheSourceSchema = z.enum(["cache", "fresh"]);
 
+export const matchParsedDataSchema = z.object({
+  label: z.string(),
+  hasFullMatchPayload: z.boolean(),
+  timelines: z.boolean(),
+  itemTimings: z.boolean(),
+  vision: z.boolean()
+});
+
 export const playerMatchSummarySchema = z.object({
   matchId: z.number(),
   startTime: z.number().nullable(),
@@ -14,7 +22,8 @@ export const playerMatchSummarySchema = z.object({
   assists: z.number().nullable(),
   win: z.boolean().nullable(),
   laneRole: z.number().nullable(),
-  gameMode: z.number().nullable()
+  gameMode: z.number().nullable(),
+  parsedData: matchParsedDataSchema
 });
 
 export const playerHeroUsageSchema = z.object({
@@ -41,11 +50,16 @@ export const playerOverviewSchema = z.object({
   avatar: z.string().nullable(),
   profileUrl: z.string().nullable(),
   countryCode: z.string().nullable(),
+  rankTier: z.number().nullable(),
+  leaderboardRank: z.number().nullable(),
   isPriorityPlayer: z.boolean(),
+  autoRefreshOnOpen: z.boolean(),
   historySyncedAt: z.number().nullable(),
   source: cacheSourceSchema,
   lastSyncedAt: z.number().nullable(),
   totalStoredMatches: z.number(),
+  totalLocalMatches: z.number(),
+  matchScopeLabel: z.string(),
   wins: z.number(),
   losses: z.number(),
   heroUsage: z.array(playerHeroUsageSchema),
@@ -72,6 +86,39 @@ export const matchParticipantSchema = z.object({
   lastHits: z.number().nullable(),
   denies: z.number().nullable(),
   level: z.number().nullable(),
+  goldTimeline: z.array(z.number()).default([]),
+  xpTimeline: z.array(z.number()).default([]),
+  lastHitsTimeline: z.array(z.number()).default([]),
+  deniesTimeline: z.array(z.number()).default([]),
+  heroDamageTimeline: z.array(z.number()).default([]),
+  damageTakenTimeline: z.array(z.number()).default([]),
+  firstPurchaseTimes: z.record(z.string(), z.number()).default({}),
+  itemUses: z.record(z.string(), z.number()).default({}),
+  purchaseLog: z.array(
+    z.object({
+      time: z.number(),
+      key: z.string(),
+      charges: z.number().nullable()
+    })
+  ).default([]),
+  observerLog: z.array(
+    z.object({
+      time: z.number(),
+      x: z.number().nullable(),
+      y: z.number().nullable(),
+      z: z.number().nullable()
+    })
+  ).default([]),
+  sentryLog: z.array(
+    z.object({
+      time: z.number(),
+      x: z.number().nullable(),
+      y: z.number().nullable(),
+      z: z.number().nullable()
+    })
+  ).default([]),
+  observerWardsPlaced: z.number().nullable(),
+  sentryWardsPlaced: z.number().nullable(),
   items: z.array(
     z.object({
       name: z.string(),
@@ -97,6 +144,15 @@ export const draftEventSchema = z.object({
   orderIndex: z.number()
 });
 
+export const providerTelemetryStatusSchema = z.object({
+  configured: z.boolean(),
+  attempted: z.boolean(),
+  timelines: z.boolean(),
+  itemTimings: z.boolean(),
+  vision: z.boolean(),
+  message: z.string().nullable()
+});
+
 export const matchOverviewSchema = z.object({
   matchId: z.number(),
   source: cacheSourceSchema,
@@ -108,6 +164,16 @@ export const matchOverviewSchema = z.object({
   direScore: z.number().nullable(),
   patch: z.string().nullable(),
   league: z.string().nullable(),
+  telemetryStatus: z.object({
+    openDota: providerTelemetryStatusSchema,
+    stratz: providerTelemetryStatusSchema,
+    effective: z.object({
+      timelines: z.boolean(),
+      itemTimings: z.boolean(),
+      vision: z.boolean()
+    })
+  }),
+  timelineMinutes: z.array(z.number()).default([]),
   participants: z.array(matchParticipantSchema),
   draft: z.array(draftEventSchema),
   summary: z.object({
@@ -169,7 +235,18 @@ export const heroMatchSummarySchema = z.object({
   radiantScore: z.number().nullable(),
   direScore: z.number().nullable(),
   patch: z.string().nullable(),
-  league: z.string().nullable()
+  league: z.string().nullable(),
+  parsedData: matchParsedDataSchema
+});
+
+export const leagueMatchPlayerSchema = z.object({
+  matchId: z.number(),
+  playerId: z.number().nullable(),
+  personaname: z.string().nullable(),
+  heroId: z.number(),
+  heroName: z.string(),
+  heroIconUrl: z.string().nullable(),
+  win: z.boolean().nullable()
 });
 
 export const heroPlayerUsageSchema = z.object({
@@ -196,6 +273,105 @@ export const heroOverviewSchema = z.object({
   playerUsage: z.array(heroPlayerUsageSchema)
 });
 
+export const leagueSummarySchema = z.object({
+  leagueId: z.number(),
+  name: z.string(),
+  matchCount: z.number(),
+  parsedFullMatches: z.number(),
+  firstMatchTime: z.number().nullable(),
+  lastMatchTime: z.number().nullable(),
+  uniquePlayers: z.number(),
+  uniqueHeroes: z.number()
+});
+
+export const leagueOverviewSchema = z.object({
+  leagueId: z.number(),
+  name: z.string(),
+  matchCount: z.number(),
+  parsedFullMatches: z.number(),
+  firstMatchTime: z.number().nullable(),
+  lastMatchTime: z.number().nullable(),
+  uniquePlayers: z.number(),
+  uniqueHeroes: z.number(),
+  topHeroes: z.array(
+    z.object({
+      heroId: z.number(),
+      heroName: z.string(),
+      heroIconUrl: z.string().nullable(),
+      games: z.number(),
+      wins: z.number(),
+      winrate: z.number()
+    })
+  ),
+    topPlayers: z.array(
+      z.object({
+        playerId: z.number().nullable(),
+        personaname: z.string().nullable(),
+        games: z.number(),
+        wins: z.number(),
+        winrate: z.number()
+      })
+    ),
+    heroes: z.array(
+      z.object({
+        heroId: z.number(),
+        heroName: z.string(),
+        heroIconUrl: z.string().nullable(),
+        games: z.number(),
+        wins: z.number(),
+        losses: z.number(),
+        winrate: z.number(),
+        uniquePlayers: z.number()
+      })
+    ).default([]),
+      players: z.array(
+        z.object({
+          playerId: z.number().nullable(),
+          personaname: z.string().nullable(),
+          games: z.number(),
+        wins: z.number(),
+        losses: z.number(),
+        winrate: z.number(),
+          uniqueHeroes: z.number()
+        })
+      ).default([]),
+      heroPlayers: z.array(
+        z.object({
+          heroId: z.number(),
+          playerId: z.number().nullable(),
+          personaname: z.string().nullable(),
+          games: z.number(),
+          wins: z.number(),
+          losses: z.number(),
+          winrate: z.number()
+        })
+      ).default([]),
+      matchPlayers: z.array(leagueMatchPlayerSchema).default([]),
+      items: z.array(
+      z.object({
+        itemId: z.number(),
+        itemName: z.string(),
+        imageUrl: z.string().nullable(),
+        cost: z.number().nullable(),
+        games: z.number(),
+        wins: z.number(),
+        losses: z.number(),
+        winrate: z.number()
+      })
+    ).default([]),
+    matches: z.array(heroMatchSummarySchema)
+  });
+
+export const leagueSyncResponseSchema = z.object({
+  leagueId: z.number(),
+  requestedMatches: z.number(),
+  fetchedMatches: z.number(),
+  skippedMatches: z.number(),
+  failedMatches: z.array(z.object({ matchId: z.number(), message: z.string() })),
+  providerMessages: z.array(z.string()).default([]),
+  overview: leagueOverviewSchema
+});
+
 export const dashboardSchema = z.object({
   totalStoredMatches: z.number(),
   primaryPlayerId: z.number().nullable(),
@@ -205,6 +381,8 @@ export const dashboardSchema = z.object({
       playerId: z.number(),
       personaname: z.string().nullable(),
       avatar: z.string().nullable(),
+      rankTier: z.number().nullable(),
+      leaderboardRank: z.number().nullable(),
       source: cacheSourceSchema,
       lastSyncedAt: z.number().nullable(),
       totalStoredMatches: z.number(),
@@ -238,6 +416,8 @@ export const playerCompareSchema = z.object({
       playerId: z.number(),
       personaname: z.string().nullable(),
       avatar: z.string().nullable(),
+      rankTier: z.number().nullable(),
+      leaderboardRank: z.number().nullable(),
       totalStoredMatches: z.number(),
       wins: z.number(),
       losses: z.number(),
@@ -293,14 +473,31 @@ export const playerCompareSchema = z.object({
 export const settingsSchema = z.object({
   openDotaApiKey: z.string().nullable(),
   stratzApiKey: z.string().nullable(),
+  steamApiKey: z.string().nullable(),
   primaryPlayerId: z.number().int().positive().nullable(),
-  favoritePlayerIds: z.array(z.number().int().positive())
+  favoritePlayerIds: z.array(z.number().int().positive()),
+  savedLeagues: z.array(
+    z.object({
+      leagueId: z.number().int().positive(),
+      slug: z.string(),
+      name: z.string()
+    })
+  ).default([]),
+  limitToRecentPatches: z.boolean().default(true)
+    ,
+  recentPatchCount: z.number().int().min(0).default(2),
+  autoRefreshPlayerIds: z.array(z.number().int().positive()).default([]),
+  colorblindMode: z.boolean().default(false),
+  stratzDailyRequestCap: z.number().int().min(1).max(100000).default(10000)
 });
 
 export type PlayerOverview = z.infer<typeof playerOverviewSchema>;
 export type MatchOverview = z.infer<typeof matchOverviewSchema>;
 export type HeroStat = z.infer<typeof heroStatSchema>;
 export type HeroOverview = z.infer<typeof heroOverviewSchema>;
+export type LeagueSummary = z.infer<typeof leagueSummarySchema>;
+export type LeagueOverview = z.infer<typeof leagueOverviewSchema>;
+export type LeagueSyncResponse = z.infer<typeof leagueSyncResponseSchema>;
 export type DashboardResponse = z.infer<typeof dashboardSchema>;
 export type SettingsPayload = z.infer<typeof settingsSchema>;
 export type PlayerCompareResponse = z.infer<typeof playerCompareSchema>;

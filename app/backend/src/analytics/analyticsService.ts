@@ -1,11 +1,12 @@
-import { count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DashboardResponse, HeroStat } from "@dota/shared";
 import { db } from "../db/client.js";
 import { drafts, heroes, items, matchPlayers, matches, players } from "../db/schema.js";
 import { buildAssetProxyUrl, defaultHeroIconPath, defaultItemImagePath } from "../utils/assets.js";
 
 export class AnalyticsService {
-  async getHeroStats(): Promise<HeroStat[]> {
+  async getHeroStats(matchScope?: { patchIds: number[]; cutoffStartTimeMs: number | null }): Promise<HeroStat[]> {
+    const scopedWhere = this.buildMatchScopeWhere(matchScope);
     const rows = await db
       .select({
         heroId: matchPlayers.heroId,
@@ -26,8 +27,9 @@ export class AnalyticsService {
         `
       })
       .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
-      .where(sql`${matchPlayers.heroId} is not null`)
+      .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere))
       .groupBy(matchPlayers.heroId, heroes.name, heroes.localizedName, heroes.iconPath)
       .orderBy(desc(count(matchPlayers.id)));
 
@@ -41,8 +43,9 @@ export class AnalyticsService {
         usages: count(matchPlayers.id)
       })
       .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(items, eq(items.id, matchPlayers.item0))
-      .where(sql`${matchPlayers.heroId} is not null and ${matchPlayers.item0} is not null`)
+      .where(and(sql`${matchPlayers.heroId} is not null and ${matchPlayers.item0} is not null`, scopedWhere))
       .groupBy(matchPlayers.heroId, items.name, items.localizedName, items.imagePath);
 
     const itemMap = new Map<
@@ -75,8 +78,12 @@ export class AnalyticsService {
     }));
   }
 
-  async getDashboard(): Promise<DashboardResponse> {
-    const [{ totalStoredMatches }] = await db.select({ totalStoredMatches: count(matches.id) }).from(matches);
+  async getDashboard(matchScope?: { patchIds: number[]; cutoffStartTimeMs: number | null }): Promise<DashboardResponse> {
+    const scopedWhere = this.buildMatchScopeWhere(matchScope);
+    const [{ totalStoredMatches }] = await db
+      .select({ totalStoredMatches: count(matches.id) })
+      .from(matches)
+      .where(scopedWhere);
 
     const mostPlayedHeroes = await db
       .select({
@@ -85,8 +92,9 @@ export class AnalyticsService {
         games: count(matchPlayers.id)
       })
       .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
-      .where(sql`${matchPlayers.heroId} is not null`)
+      .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere))
       .groupBy(matchPlayers.heroId, heroes.localizedName)
       .orderBy(desc(count(matchPlayers.id)))
       .limit(5);
@@ -103,8 +111,9 @@ export class AnalyticsService {
         winrate: heroWinrateExpr
       })
       .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
-      .where(sql`${matchPlayers.heroId} is not null`)
+      .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere))
       .groupBy(matchPlayers.heroId, heroes.localizedName)
       .having(sql`count(${matchPlayers.id}) >= 3`)
       .orderBy(desc(heroWinrateExpr))
@@ -150,5 +159,21 @@ export class AnalyticsService {
       isPick: row.isPick,
       orderIndex: row.orderIndex
     }));
+  }
+
+  private buildMatchScopeWhere(matchScope?: { patchIds: number[]; cutoffStartTimeMs: number | null }) {
+    if (!matchScope || (matchScope.patchIds.length === 0 && !matchScope.cutoffStartTimeMs)) {
+      return sql`1 = 1`;
+    }
+
+    const clauses = [];
+    if (matchScope.patchIds.length > 0) {
+      clauses.push(inArray(matches.patchId, matchScope.patchIds));
+    }
+    if (matchScope.cutoffStartTimeMs) {
+      clauses.push(sql`${matches.startTime} >= ${matchScope.cutoffStartTimeMs}`);
+    }
+
+    return sql`(${sql.join(clauses, sql` or `)})`;
   }
 }

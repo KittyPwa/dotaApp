@@ -9,6 +9,8 @@ export interface OpenDotaPlayerProfileResponse {
     profileurl?: string;
     loccountrycode?: string;
   };
+  rank_tier?: number;
+  leaderboard_rank?: number;
 }
 
 export interface OpenDotaRecentMatch {
@@ -28,6 +30,22 @@ export interface OpenDotaRecentMatch {
 export interface OpenDotaPlayerWinLossResponse {
   win?: number;
   lose?: number;
+}
+
+export interface OpenDotaLeagueMatch {
+  match_id: number;
+  radiant_win?: boolean | null;
+  radiant_score?: number | null;
+  dire_score?: number | null;
+  duration?: number | null;
+  start_time?: number | null;
+  leagueid?: number | null;
+  league_name?: string | null;
+}
+
+interface OpenDotaExplorerResponse<T> {
+  rows?: T[];
+  err?: string | null;
 }
 
 export interface OpenDotaMatchResponse {
@@ -65,7 +83,17 @@ export interface OpenDotaMatchResponse {
     backpack_0?: number;
     backpack_1?: number;
     backpack_2?: number;
+    gold_t?: number[];
+    xp_t?: number[];
+    lh_t?: number[];
+    dn_t?: number[];
     first_purchase_time?: Record<string, number>;
+    item_uses?: Record<string, number>;
+    purchase_log?: Array<{ time?: number; key?: string; charges?: number }>;
+    obs_log?: Array<{ time?: number; x?: number; y?: number; z?: number }>;
+    sen_log?: Array<{ time?: number; x?: number; y?: number; z?: number }>;
+    obs_placed?: number;
+    sen_placed?: number;
   }>;
   picks_bans?: Array<{
     is_pick: boolean;
@@ -92,8 +120,15 @@ export type OpenDotaItemsResponse = Record<
     id: number;
     dname?: string;
     img?: string;
+    cost?: number;
   }
 >;
+
+export interface OpenDotaPatchResponseItem {
+  id: number;
+  name: string;
+  date?: string;
+}
 
 export class OpenDotaAdapter {
   private readonly baseUrl = "https://api.opendota.com/api";
@@ -152,6 +187,40 @@ export class OpenDotaAdapter {
     return { payload, fetchedAt };
   }
 
+  async getLeagueMatches(leagueId: number): Promise<ProviderFetchResult<OpenDotaLeagueMatch[]>> {
+    const fetchedAt = Date.now();
+    const payload = await fetchJsonWithRetry<OpenDotaLeagueMatch[]>(
+      this.buildUrl(`/leagues/${leagueId}/matches`),
+      { headers: { Accept: "application/json" } },
+      { provider: "opendota" }
+    );
+    return { payload, fetchedAt };
+  }
+
+  async getLeagueMatchesFromExplorer(leagueId: number): Promise<ProviderFetchResult<OpenDotaLeagueMatch[]>> {
+    const fetchedAt = Date.now();
+    const url = this.buildUrl("/explorer");
+    url.searchParams.set(
+      "sql",
+      `
+        select match_id, start_time, duration, radiant_win, leagueid
+        from matches
+        where leagueid = ${leagueId}
+        order by start_time desc
+        limit 500
+      `
+    );
+    const payload = await fetchJsonWithRetry<OpenDotaExplorerResponse<OpenDotaLeagueMatch>>(
+      url,
+      { headers: { Accept: "application/json" } },
+      { provider: "opendota" }
+    );
+    if (payload.err) {
+      throw new Error(payload.err);
+    }
+    return { payload: payload.rows ?? [], fetchedAt };
+  }
+
   async getMatch(matchId: number): Promise<ProviderFetchResult<OpenDotaMatchResponse>> {
     const fetchedAt = Date.now();
     const payload = await fetchJsonWithRetry<OpenDotaMatchResponse>(
@@ -176,6 +245,16 @@ export class OpenDotaAdapter {
     const fetchedAt = Date.now();
     const payload = await fetchJsonWithRetry<OpenDotaItemsResponse>(
       this.buildUrl("/constants/items"),
+      { headers: { Accept: "application/json" } },
+      { provider: "opendota" }
+    );
+    return { payload, fetchedAt };
+  }
+
+  async getPatches(): Promise<ProviderFetchResult<OpenDotaPatchResponseItem[]>> {
+    const fetchedAt = Date.now();
+    const payload = await fetchJsonWithRetry<OpenDotaPatchResponseItem[]>(
+      this.buildUrl("/constants/patch"),
       { headers: { Accept: "application/json" } },
       { provider: "opendota" }
     );

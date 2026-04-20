@@ -28,6 +28,12 @@ export async function fetchJsonWithRetry<T>(
 
     const retryable = response.status >= 500 || response.status === 429;
     const body = await response.text();
+    const isCloudflareChallenge =
+      response.status === 403 &&
+      (body.includes("Just a moment") || body.includes("Enable JavaScript and cookies to continue") || body.includes("cf_chl"));
+    const message = isCloudflareChallenge
+      ? "Upstream request was blocked by Cloudflare (403). This environment may not be allowed to access the provider API directly."
+      : `Upstream request failed with status ${response.status}`;
 
     if (!retryable || attempt === retries) {
       logger.error("Upstream request failed", {
@@ -36,7 +42,7 @@ export async function fetchJsonWithRetry<T>(
         body
       });
       throw new UpstreamHttpError(
-        `Upstream request failed with status ${response.status}`,
+        message,
         response.status,
         retryable
       );

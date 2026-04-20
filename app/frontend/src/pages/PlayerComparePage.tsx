@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
 import { IconImage } from "../components/IconImage";
 import { Page } from "../components/Page";
 import { EmptyState, ErrorState, LoadingState } from "../components/State";
 import { TableCard } from "../components/TableCard";
+import { usePagination } from "../hooks/usePagination";
 import { useDashboard, usePlayerCompare } from "../hooks/useQueries";
 import { formatDate, formatDuration } from "../lib/format";
 
@@ -19,9 +21,14 @@ export function PlayerComparePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [inputValue, setInputValue] = useState(searchParams.get("ids") ?? "");
   const [selectedComboKey, setSelectedComboKey] = useState<string | null>(null);
-  const [pairPage, setPairPage] = useState(1);
-  const [comboPage, setComboPage] = useState(1);
-  const [comboMatchPage, setComboMatchPage] = useState(1);
+  const [pairSort, setPairSort] = useState<{ key: "players" | "games" | "record" | "winrate"; direction: "asc" | "desc" }>({
+    key: "games",
+    direction: "desc"
+  });
+  const [comboMatchSort, setComboMatchSort] = useState<{ key: "match" | "date" | "duration" | "result"; direction: "asc" | "desc" }>({
+    key: "date",
+    direction: "desc"
+  });
 
   const playerIds = parsePlayerIds(searchParams.get("ids") ?? "");
   const query = usePlayerCompare(playerIds);
@@ -34,32 +41,62 @@ export function PlayerComparePage() {
       ? query.data.sharedMatchDetails.filter((match) => selectedCombo.matchIds.includes(match.matchId))
       : [];
 
-  const pairPageSize = 20;
-  const comboPageSize = 12;
-  const comboMatchPageSize = 20;
-  const pairRows = query.data?.pairStats ?? [];
-  const pairTotalPages = Math.max(1, Math.ceil(pairRows.length / pairPageSize));
-  const currentPairPage = Math.min(pairPage, pairTotalPages);
-  const pagedPairRows = pairRows.slice((currentPairPage - 1) * pairPageSize, currentPairPage * pairPageSize);
+  const pairRows = [...(query.data?.pairStats ?? [])].sort((left, right) => {
+    let compare = 0;
+    switch (pairSort.key) {
+      case "players":
+        compare = `${playerNameMap.get(left.leftPlayerId) ?? left.leftPlayerId}+${playerNameMap.get(left.rightPlayerId) ?? left.rightPlayerId}`.localeCompare(
+          `${playerNameMap.get(right.leftPlayerId) ?? right.leftPlayerId}+${playerNameMap.get(right.rightPlayerId) ?? right.rightPlayerId}`
+        );
+        break;
+      case "record":
+        compare = (left.wins - left.losses) - (right.wins - right.losses);
+        break;
+      case "winrate":
+        compare = left.winrate - right.winrate;
+        break;
+      case "games":
+      default:
+        compare = left.games - right.games;
+        break;
+    }
+    return pairSort.direction === "asc" ? compare : -compare;
+  });
   const comboRows = query.data?.heroCombinations ?? [];
-  const comboTotalPages = Math.max(1, Math.ceil(comboRows.length / comboPageSize));
-  const currentComboPage = Math.min(comboPage, comboTotalPages);
-  const pagedComboRows = comboRows.slice((currentComboPage - 1) * comboPageSize, currentComboPage * comboPageSize);
-  const comboMatchTotalPages = Math.max(1, Math.ceil(filteredComboMatches.length / comboMatchPageSize));
-  const currentComboMatchPage = Math.min(comboMatchPage, comboMatchTotalPages);
-  const pagedComboMatches = filteredComboMatches.slice(
-    (currentComboMatchPage - 1) * comboMatchPageSize,
-    currentComboMatchPage * comboMatchPageSize
-  );
+  const sortedComboMatches = [...filteredComboMatches].sort((left, right) => {
+    let compare = 0;
+    switch (comboMatchSort.key) {
+      case "match":
+        compare = left.matchId - right.matchId;
+        break;
+      case "duration":
+        compare = (left.durationSeconds ?? 0) - (right.durationSeconds ?? 0);
+        break;
+      case "result":
+        compare = Number(left.win ?? false) - Number(right.win ?? false);
+        break;
+      case "date":
+      default:
+        compare = (left.startTime ?? 0) - (right.startTime ?? 0);
+        break;
+    }
+    return comboMatchSort.direction === "asc" ? compare : -compare;
+  });
+  const pairPagination = usePagination(pairRows.length, 20, [20, 50, 100]);
+  const comboPagination = usePagination(comboRows.length, 12, [12, 24, 48]);
+  const comboMatchPagination = usePagination(sortedComboMatches.length, 20, [20, 50, 100]);
+  const pagedPairRows = pairPagination.paged(pairRows);
+  const pagedComboRows = comboPagination.paged(comboRows);
+  const pagedComboMatches = comboMatchPagination.paged(sortedComboMatches);
 
   const applyIds = (ids: number[]) => {
     const uniqueIds = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
     const nextValue = uniqueIds.join(",");
     setInputValue(nextValue);
     setSelectedComboKey(null);
-    setPairPage(1);
-    setComboPage(1);
-    setComboMatchPage(1);
+    pairPagination.resetPage();
+    comboPagination.resetPage();
+    comboMatchPagination.resetPage();
     setSearchParams(nextValue ? { ids: nextValue } : {});
   };
 
@@ -211,38 +248,44 @@ export function PlayerComparePage() {
             <TableCard
               title="Pairwise synergy"
               rowCount={pagedPairRows.length}
-              page={currentPairPage}
-              totalPages={pairTotalPages}
-              onPreviousPage={() => setPairPage((value) => Math.max(1, value - 1))}
-              onNextPage={() => setPairPage((value) => Math.min(pairTotalPages, value + 1))}
+              totalItems={pairRows.length}
+              page={pairPagination.page}
+              totalPages={pairPagination.totalPages}
+              pageSize={pairPagination.pageSize}
+              pageSizeOptions={pairPagination.pageSizeOptions}
+              onPreviousPage={pairPagination.previousPage}
+              onNextPage={pairPagination.nextPage}
+              onPageSizeChange={pairPagination.setPageSize}
               empty={<EmptyState label="No pairwise overlap found in the local dataset yet." />}
             >
-              <table>
-                <thead>
-                  <tr>
-                    <th>Players</th>
-                    <th>Games</th>
-                    <th>Record</th>
-                    <th>Winrate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedPairRows.map((pair) => (
-                    <tr key={`${pair.leftPlayerId}-${pair.rightPlayerId}`}>
-                      <td>
+              <DataTable
+                rows={pagedPairRows}
+                getRowKey={(pair) => `${pair.leftPlayerId}-${pair.rightPlayerId}`}
+                sortState={pairSort}
+                onSortChange={(key) =>
+                  setPairSort((current) => ({
+                    key: key as "players" | "games" | "record" | "winrate",
+                    direction: current.key === key && current.direction === "desc" ? "asc" : "desc"
+                  }))
+                }
+                columns={[
+                  {
+                    key: "players",
+                    header: "Players",
+                    sortable: true,
+                    cell: (pair) => (
+                      <>
                         <Link to={`/players/${pair.leftPlayerId}`}>{playerNameMap.get(pair.leftPlayerId) ?? pair.leftPlayerId}</Link>
                         {" + "}
                         <Link to={`/players/${pair.rightPlayerId}`}>{playerNameMap.get(pair.rightPlayerId) ?? pair.rightPlayerId}</Link>
-                      </td>
-                      <td>{pair.games}</td>
-                      <td>
-                        {pair.wins}W / {pair.losses}L
-                      </td>
-                      <td>{pair.winrate}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </>
+                    )
+                  },
+                  { key: "games", header: "Games", sortable: true, cell: (pair) => pair.games },
+                  { key: "record", header: "Record", sortable: true, cell: (pair) => `${pair.wins}W / ${pair.losses}L` },
+                  { key: "winrate", header: "Winrate", sortable: true, cell: (pair) => `${pair.winrate}%` }
+                ]}
+              />
             </TableCard>
 
             <Card title="Hero combinations together">
@@ -261,7 +304,7 @@ export function PlayerComparePage() {
                       type="button"
                       className={`combo-card combo-button ${selectedComboKey === combo.comboKey ? "active" : ""}`}
                       onClick={() => {
-                        setComboMatchPage(1);
+                        comboMatchPagination.resetPage();
                         setSelectedComboKey((value) => (value === combo.comboKey ? null : combo.comboKey));
                       }}
                     >
@@ -293,17 +336,23 @@ export function PlayerComparePage() {
                     </button>
                   ))}
                   <div className="pagination-inline">
-                    <button type="button" onClick={() => setComboPage((value) => Math.max(1, value - 1))} disabled={currentComboPage <= 1}>
+                    <label className="pagination-page-size">
+                      Rows
+                      <select value={comboPagination.pageSize} onChange={(event) => comboPagination.setPageSize(Number(event.target.value))}>
+                        {comboPagination.pageSizeOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button type="button" onClick={comboPagination.previousPage} disabled={comboPagination.page <= 1}>
                       Prev
                     </button>
                     <span>
-                      Page {currentComboPage} / {comboTotalPages}
+                      Page {comboPagination.page} / {comboPagination.totalPages}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setComboPage((value) => Math.min(comboTotalPages, value + 1))}
-                      disabled={currentComboPage >= comboTotalPages}
-                    >
+                    <button type="button" onClick={comboPagination.nextPage} disabled={comboPagination.page >= comboPagination.totalPages}>
                       Next
                     </button>
                   </div>
@@ -315,10 +364,14 @@ export function PlayerComparePage() {
           <TableCard
             title={selectedCombo ? `Matches for ${selectedCombo.comboKey}` : "Select a hero combination"}
             rowCount={selectedCombo ? pagedComboMatches.length : 0}
-            page={currentComboMatchPage}
-            totalPages={comboMatchTotalPages}
-            onPreviousPage={() => setComboMatchPage((value) => Math.max(1, value - 1))}
-            onNextPage={() => setComboMatchPage((value) => Math.min(comboMatchTotalPages, value + 1))}
+            totalItems={selectedCombo ? sortedComboMatches.length : 0}
+            page={comboMatchPagination.page}
+            totalPages={comboMatchPagination.totalPages}
+            pageSize={comboMatchPagination.pageSize}
+            pageSizeOptions={comboMatchPagination.pageSizeOptions}
+            onPreviousPage={comboMatchPagination.previousPage}
+            onNextPage={comboMatchPagination.nextPage}
+            onPageSizeChange={comboMatchPagination.setPageSize}
             empty={
               selectedCombo ? (
                 <EmptyState label="No matching local matches were found for this combination." />
@@ -332,28 +385,37 @@ export function PlayerComparePage() {
               ) : null
             }
           >
-            <table>
-              <thead>
-                <tr>
-                  <th>Match</th>
-                  <th>Date</th>
-                  <th>Duration</th>
-                  <th>Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedComboMatches.map((match) => (
-                  <tr key={match.matchId} className={match.win === true ? "row-win" : match.win === false ? "row-loss" : "row-unknown"}>
-                    <td>
-                      <Link to={`/matches/${match.matchId}`}>{match.matchId}</Link>
-                    </td>
-                    <td>{formatDate(match.startTime)}</td>
-                    <td>{formatDuration(match.durationSeconds)}</td>
-                    <td>{match.win === true ? "Win" : match.win === false ? "Loss" : "Unknown"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              rows={pagedComboMatches}
+              className="player-history-table"
+              getRowKey={(match) => String(match.matchId)}
+              rowClassName={(match) =>
+                match.win === true ? "row-win" : match.win === false ? "row-loss" : "row-unknown"
+              }
+              sortState={comboMatchSort}
+              onSortChange={(key) =>
+                setComboMatchSort((current) => ({
+                  key: key as "match" | "date" | "duration" | "result",
+                  direction: current.key === key && current.direction === "desc" ? "asc" : "desc"
+                }))
+              }
+              columns={[
+                {
+                  key: "match",
+                  header: "Match",
+                  sortable: true,
+                  cell: (match) => <Link to={`/matches/${match.matchId}`}>{match.matchId}</Link>
+                },
+                { key: "date", header: "Date", sortable: true, cell: (match) => formatDate(match.startTime) },
+                { key: "duration", header: "Duration", sortable: true, cell: (match) => formatDuration(match.durationSeconds) },
+                {
+                  key: "result",
+                  header: "Result",
+                  sortable: true,
+                  cell: (match) => (match.win === true ? "Win" : match.win === false ? "Loss" : "Unknown")
+                }
+              ]}
+            />
           </TableCard>
         </>
       ) : null}

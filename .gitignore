@@ -6,3 +6,7 @@ dist
 app/backend/.data
 app/frontend/dist
 *.tsbuildinfo
+data/
+logs/
+*.log
+-

@@ -17,7 +17,8 @@ const envSchema = z.object({
   REFERENCE_DATA_TTL_HOURS: z.coerce.number().default(168),
   OPEN_BROWSER: z.string().default("true"),
   OPENDOTA_API_KEY: z.string().optional(),
-  STRATZ_API_KEY: z.string().optional()
+  STRATZ_API_KEY: z.string().optional(),
+  STEAM_API_KEY: z.string().optional()
 });
 
 const env = envSchema.parse(process.env);
@@ -34,6 +35,7 @@ export const config = {
   },
   envKeys: {
     openDotaApiKey: env.OPENDOTA_API_KEY ?? null,
-    stratzApiKey: env.STRATZ_API_KEY ?? null
+    stratzApiKey: env.STRATZ_API_KEY ?? null,
+    steamApiKey: env.STEAM_API_KEY ?? null
   }
 };

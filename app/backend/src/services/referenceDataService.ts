@@ -1,7 +1,7 @@
 import { desc, eq, isNull } from "drizzle-orm";
 import { OpenDotaAdapter } from "../adapters/openDota.js";
 import { db } from "../db/client.js";
-import { heroes, items, rawApiPayloads } from "../db/schema.js";
+import { heroes, items, patches, rawApiPayloads } from "../db/schema.js";
 import { defaultHeroIconPath, defaultHeroPortraitPath, defaultItemImagePath } from "../utils/assets.js";
 import { config } from "../utils/config.js";
 import { RawPayloadService } from "./rawPayloadService.js";
@@ -15,6 +15,11 @@ export class ReferenceDataService {
   async syncIfStale() {
     const [heroWithoutIcons] = await db.select().from(heroes).where(isNull(heroes.iconPath)).limit(1);
     const [itemWithoutImage] = await db.select().from(items).where(isNull(items.imagePath)).limit(1);
+    const [placeholderPatch] = await db
+      .select()
+      .from(patches)
+      .where(eq(patches.name, "Patch 60"))
+      .limit(1);
     const [latestHeroFetch] = await db
       .select()
       .from(rawApiPayloads)
@@ -25,15 +30,17 @@ export class ReferenceDataService {
     if (
       !heroWithoutIcons &&
       !itemWithoutImage &&
+      !placeholderPatch &&
       latestHeroFetch?.fetchedAt &&
       Date.now() - latestHeroFetch.fetchedAt.getTime() < config.staleWindows.referenceDataMs
     ) {
       return;
     }
 
-    const [heroStats, itemDictionary] = await Promise.all([
+    const [heroStats, itemDictionary, patchList] = await Promise.all([
       this.openDota.getHeroStats(),
-      this.openDota.getItems()
+      this.openDota.getItems(),
+      this.openDota.getPatches()
     ]);
 
     await this.rawPayloadService.store({
@@ -50,6 +57,14 @@ export class ReferenceDataService {
       entityId: "all",
       fetchedAt: itemDictionary.fetchedAt,
       rawJson: itemDictionary.payload
+    });
+
+    await this.rawPayloadService.store({
+      provider: "opendota",
+      entityType: "patches",
+      entityId: "all",
+      fetchedAt: patchList.fetchedAt,
+      rawJson: patchList.payload
     });
 
     const now = new Date();
@@ -100,6 +115,24 @@ export class ReferenceDataService {
             localizedName: item.dname ?? name,
             imagePath: item.img ?? defaultItemImagePath(name),
             updatedAt: now
+          }
+        });
+    }
+
+    for (const patch of patchList.payload) {
+      const displayName = patch.id === 60 ? "7.41b" : patch.name;
+      await db
+        .insert(patches)
+        .values({
+          id: patch.id,
+          name: displayName,
+          releaseDate: patch.date ? new Date(patch.date) : null
+        })
+        .onConflictDoUpdate({
+          target: patches.id,
+          set: {
+            name: displayName,
+            releaseDate: patch.date ? new Date(patch.date) : null
           }
         });
     }

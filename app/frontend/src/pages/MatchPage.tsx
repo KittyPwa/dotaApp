@@ -1,10 +1,11 @@
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { IconImage } from "../components/IconImage";
 import { MetricGrid } from "../components/MetricGrid";
 import { Page } from "../components/Page";
 import { ErrorState, LoadingState } from "../components/State";
-import { useMatch } from "../hooks/useQueries";
+import { useMatch, useRefreshMatch } from "../hooks/useQueries";
 import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
 function formatPercent(value: number) {
@@ -17,21 +18,1460 @@ function getKdaRatio(kills: number | null, deaths: number | null, assists: numbe
   return (total / safeDeaths).toFixed(2);
 }
 
+function formatTimelineMinute(minute: number) {
+  return `${minute}:00`;
+}
+
+function cumulativeTimeline(values: number[]) {
+  let running = 0;
+  return values.map((value) => {
+    running += value;
+    return running;
+  });
+}
+
+function isLikelyCumulativeTimeline(values: number[]) {
+  if (values.length < 3) return false;
+  let decreases = 0;
+  for (let index = 1; index < values.length; index += 1) {
+    if ((values[index] ?? 0) < (values[index - 1] ?? 0)) decreases += 1;
+  }
+  return decreases / Math.max(1, values.length - 1) < 0.08;
+}
+
+function perMinuteTimeline(values: number[]) {
+  if (!isLikelyCumulativeTimeline(values)) return values;
+  return values.map((value, index) => (index === 0 ? value : Math.max(0, value - (values[index - 1] ?? 0))));
+}
+
+function totalTimeline(values: number[]) {
+  return isLikelyCumulativeTimeline(values) ? values : cumulativeTimeline(values);
+}
+
+const xpForLevel = [
+  0, 230, 600, 1080, 1660, 2260, 2980, 3730, 4620, 5550, 6525, 7530, 8580, 9805, 11055, 12330, 13630, 14955,
+  16455, 18045, 19645, 21495, 23595, 25945, 28545, 32045, 36545, 42045, 48545, 55045
+];
+
+const expensiveItemCosts: Record<string, number> = {
+  abyssal_blade: 6250,
+  aeon_disk: 3000,
+  aether_lens: 2275,
+  aghanim_scepter: 4200,
+  aghanim_shard: 1400,
+  armlet: 2500,
+  assault: 5125,
+  bfury: 4100,
+  black_king_bar: 4050,
+  blink: 2250,
+  bloodstone: 4400,
+  bloodthorn: 6625,
+  boots_of_bearing: 4125,
+  butterfly: 5450,
+  crimson_guard: 3725,
+  cyclone: 2725,
+  dagon: 2850,
+  desolator: 3500,
+  diffusal_blade: 2500,
+  disperser: 6100,
+  dragon_lance: 1900,
+  echo_sabre: 2700,
+  eternal_shroud: 3300,
+  ethereal_blade: 4650,
+  force_staff: 2200,
+  gleipnir: 5750,
+  glimmer_cape: 2150,
+  greater_crit: 5150,
+  guardian_greaves: 5050,
+  heart: 5200,
+  heavens_halberd: 3550,
+  hurricane_pike: 4450,
+  invis_sword: 3000,
+  kaya: 2100,
+  kaya_and_sange: 4200,
+  linken_sphere: 4800,
+  manta: 4650,
+  maelstrom: 2950,
+  mage_slayer: 2825,
+  mask_of_madness: 1900,
+  mekansm: 1775,
+  mjollnir: 5500,
+  monkey_king_bar: 4700,
+  lesser_crit: 1950,
+  nullifier: 4375,
+  orchid: 3275,
+  pipe: 3725,
+  radiance: 4700,
+  refresher: 5000,
+  sange: 2100,
+  sange_and_yasha: 4200,
+  satanic: 5050,
+  sheepstick: 5200,
+  shivas_guard: 5175,
+  silver_edge: 5450,
+  skadi: 5300,
+  solar_crest: 2600,
+  sphere: 4800,
+  travel_boots: 2500,
+  ultimate_scepter: 4200,
+  veil_of_discord: 1725,
+  yasha: 2100,
+  yasha_and_kaya: 4200
+};
+
+const completedItemSlugs = new Set([
+  "abyssal_blade",
+  "aeon_disk",
+  "aether_lens",
+  "aghanim_scepter",
+  "armlet",
+  "assault",
+  "bfury",
+  "black_king_bar",
+  "blink",
+  "bloodstone",
+  "bloodthorn",
+  "boots_of_bearing",
+  "butterfly",
+  "crimson_guard",
+  "cyclone",
+  "dagon",
+  "desolator",
+  "diffusal_blade",
+  "disperser",
+  "dragon_lance",
+  "echo_sabre",
+  "eternal_shroud",
+  "ethereal_blade",
+  "force_staff",
+  "gleipnir",
+  "glimmer_cape",
+  "greater_crit",
+  "guardian_greaves",
+  "heart",
+  "heavens_halberd",
+  "hurricane_pike",
+  "invis_sword",
+  "kaya_and_sange",
+  "linken_sphere",
+  "manta",
+  "maelstrom",
+  "mage_slayer",
+  "mask_of_madness",
+  "mekansm",
+  "mjollnir",
+  "monkey_king_bar",
+  "nullifier",
+  "orchid",
+  "pipe",
+  "radiance",
+  "refresher",
+  "sange_and_yasha",
+  "satanic",
+  "sheepstick",
+  "shivas_guard",
+  "silver_edge",
+  "skadi",
+  "solar_crest",
+  "travel_boots",
+  "ultimate_scepter",
+  "veil_of_discord",
+  "yasha_and_kaya"
+]);
+
+const itemSlugOverrides: Record<string, string> = {
+  aghanims_scepter: "aghanim_scepter",
+  aghanims_shard: "aghanim_shard",
+  aghanims_blessing: "ultimate_scepter_2",
+  aghanims_blessing_recipe: "recipe_ultimate_scepter_2",
+  aghanim_s_blessing: "ultimate_scepter_2",
+  aghanim_s_blessing_recipe: "recipe_ultimate_scepter_2",
+  aghanim_s_scepter: "ultimate_scepter",
+  aghanim_s_shard: "aghanim_shard",
+  blink_dagger: "blink",
+  battle_fury: "bfury",
+  butterfly: "butterfly",
+  black_king_bar: "black_king_bar",
+  chrysalis: "lesser_crit",
+  crystalis: "lesser_crit",
+  crystalys: "lesser_crit",
+  daedalus: "greater_crit",
+  desolator: "desolator",
+  dragon_lance: "dragon_lance",
+  eye_of_skadi: "skadi",
+  hurricane_pike: "hurricane_pike",
+  lincoln_s_sphere: "sphere",
+  linken_s_sphere: "sphere",
+  linkens_sphere: "sphere",
+  linken_sphere: "sphere",
+  monkey_king_bar: "monkey_king_bar",
+  shadow_blade: "invis_sword",
+  swift_blink: "swift_blink"
+};
+
+function normalizeItemSlug(itemName: string) {
+  const normalized = itemName
+    .replace(/^item_/i, "")
+    .trim()
+    .toLowerCase()
+    .replace(/['’]s/g, "s")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return itemSlugOverrides[normalized] ?? normalized;
+}
+
+function getItemImageUrl(itemName: string) {
+  const slug = normalizeItemSlug(itemName);
+  return `/api/assets/opendota?path=${encodeURIComponent(`/apps/dota2/images/dota_react/items/${slug}.png`)}`;
+}
+
+function getKnownItemCost(itemName: string) {
+  return expensiveItemCosts[normalizeItemSlug(itemName)] ?? null;
+}
+
+function isCoreTimelineItem(itemName: string) {
+  const slug = normalizeItemSlug(itemName);
+  const cost = expensiveItemCosts[slug] ?? null;
+  return completedItemSlugs.has(slug) || (cost !== null && cost > 1500);
+}
+
+function getLevelMarkers(cumulativeXp: number[]) {
+  const markers: Array<{ index: number; value: number; label: string }> = [];
+  for (let level = 2; level <= xpForLevel.length; level += 1) {
+    const requiredXp = xpForLevel[level - 1];
+    const index = cumulativeXp.findIndex((value) => value >= requiredXp);
+    if (index >= 0) {
+      markers.push({ index, value: cumulativeXp[index], label: `L${level}` });
+    }
+  }
+  return markers;
+}
+
+function summarizeProviderStatus(status: {
+  configured: boolean;
+  attempted: boolean;
+  timelines: boolean;
+  itemTimings: boolean;
+  vision: boolean;
+  message: string | null;
+}) {
+  if (!status.configured) {
+    return "Not configured";
+  }
+
+  if (!status.attempted) {
+    return "Not needed";
+  }
+
+  if (status.timelines || status.itemTimings || status.vision) {
+    return "Enrichment active";
+  }
+
+  return "No extra telemetry added";
+}
+
+function shouldShowProviderDetails(status: {
+  configured: boolean;
+  attempted: boolean;
+  timelines: boolean;
+  itemTimings: boolean;
+  vision: boolean;
+  message: string | null;
+}) {
+  if (!status.message) return false;
+  if (!status.configured) return true;
+  if (status.attempted && !status.timelines && !status.itemTimings && !status.vision) return true;
+  return false;
+}
+
+function getCssVar(name: string, fallback: string) {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function getTimelinePalette(side: "radiant" | "dire") {
+  if (side === "radiant") {
+    return [
+      getCssVar("--timeline-radiant-1", "#2ecc71"),
+      getCssVar("--timeline-radiant-2", "#27ae60"),
+      getCssVar("--timeline-radiant-3", "#16a085"),
+      getCssVar("--timeline-radiant-4", "#1abc9c"),
+      getCssVar("--timeline-radiant-5", "#58d68d")
+    ];
+  }
+
+  return [
+    getCssVar("--timeline-dire-1", "#e74c3c"),
+    getCssVar("--timeline-dire-2", "#c0392b"),
+    getCssVar("--timeline-dire-3", "#d35400"),
+    getCssVar("--timeline-dire-4", "#e67e22"),
+    getCssVar("--timeline-dire-5", "#ff7675")
+  ];
+}
+
+type TimelinePointSeries = {
+  key: string;
+  label: string;
+  iconUrl?: string | null;
+  color: string;
+  values: number[];
+  plotValues?: number[];
+  strokeDasharray?: string;
+  strokeWidth?: number;
+  opacity?: number;
+};
+
+type TimelineEventMarker = {
+  key: string;
+  label: string;
+  index: number;
+  yPercent: number;
+  iconUrl?: string | null;
+  color: string;
+};
+
+type TimelineMode = "perMinute" | "cumulative";
+
+type TimelineMarkerSeries = {
+  key: string;
+  color: string;
+  markers: Array<{ index: number; value: number; label: string }>;
+};
+
+function TimelinePlot({
+  title,
+  series,
+  markerSeries = [],
+  eventMarkers = [],
+  timelineMinutes,
+  hoveredIndex,
+  onHoveredIndexChange
+}: {
+  title: string;
+  series: TimelinePointSeries[];
+  markerSeries?: TimelineMarkerSeries[];
+  eventMarkers?: TimelineEventMarker[];
+  timelineMinutes: number[];
+  hoveredIndex: number | null;
+  onHoveredIndexChange: (index: number | null) => void;
+}) {
+  const width = 860;
+  const height = 320;
+  const innerHeight = height - 26;
+  const lengths = series.map((entry) => entry.values.length);
+  const maxLength = Math.max(...lengths, 0);
+  const allValues = series.flatMap((entry) => entry.plotValues ?? entry.values);
+  const maxValue = Math.max(...allValues, 1);
+
+  if (maxLength < 2) {
+    return (
+      <div className="timeline-plot-panel">
+        <div className="timeline-panel-title">{title}</div>
+        <p className="muted-inline">No timeline data available for this view.</p>
+      </div>
+    );
+  }
+
+  const effectiveIndex = hoveredIndex === null ? maxLength - 1 : Math.min(maxLength - 1, Math.max(0, hoveredIndex));
+  const xForIndex = (index: number) => (index / (maxLength - 1)) * width;
+  const yForValue = (value: number) => height - (value / maxValue) * (innerHeight - 20) - 12;
+  const verticalMarkers = Array.from({ length: Math.floor((maxLength - 1) / 10) }, (_, index) => (index + 1) * 10).filter(
+    (index) => index < maxLength
+  );
+  const horizontalMarkers = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <div className="timeline-plot-panel">
+      <div className="timeline-panel-title">{title}</div>
+      <svg
+        className="timeline-chart timeline-chart-lg"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        onMouseMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = ((event.clientX - rect.left) / rect.width) * width;
+          const index = Math.round((Math.max(0, Math.min(width, x)) / width) * (maxLength - 1));
+          onHoveredIndexChange(index);
+        }}
+        onMouseLeave={() => onHoveredIndexChange(null)}
+      >
+        {horizontalMarkers.map((marker) => {
+          const y = height - marker * (innerHeight - 20) - 12;
+          return (
+            <line
+              key={`h-${title}-${marker}`}
+              x1={0}
+              x2={width}
+              y1={y}
+              y2={y}
+              stroke="rgba(23, 32, 42, 0.12)"
+              strokeDasharray="4 6"
+            />
+          );
+        })}
+        {verticalMarkers.map((minuteIndex) => {
+          const x = xForIndex(minuteIndex);
+          return (
+            <g key={`v-${title}-${minuteIndex}`}>
+              <line x1={x} x2={x} y1={0} y2={height} stroke="rgba(23, 32, 42, 0.12)" strokeDasharray="4 6" />
+              <text x={x + 4} y={16} fill="rgba(23,32,42,0.55)" fontSize="12">
+                {formatTimelineMinute(timelineMinutes[minuteIndex] ?? minuteIndex)}
+              </text>
+            </g>
+          );
+        })}
+        {series.map((entry) => {
+          const chartValues = entry.plotValues ?? entry.values;
+          const points = chartValues.map((value, pointIndex) => `${xForIndex(pointIndex)},${yForValue(value)}`).join(" ");
+          const hoveredValue = entry.values[effectiveIndex];
+          const hoveredPlotValue = chartValues[effectiveIndex];
+          return (
+            <g key={`${entry.key}-${title}`}>
+              <polyline
+                fill="none"
+                stroke={entry.color}
+                strokeWidth={entry.strokeWidth ?? 3}
+                strokeDasharray={entry.strokeDasharray}
+                strokeOpacity={entry.opacity ?? 1}
+                points={points}
+              />
+              {hoveredValue !== undefined && hoveredPlotValue !== undefined ? (
+                <circle cx={xForIndex(effectiveIndex)} cy={yForValue(hoveredPlotValue)} r="4" fill={entry.color} />
+              ) : null}
+            </g>
+          );
+        })}
+        {markerSeries.map((entry) =>
+          entry.markers.map((marker) => (
+            <g key={`${entry.key}-${marker.label}-${marker.index}`}>
+              <circle cx={xForIndex(marker.index)} cy={yForValue(marker.value)} r="3.5" fill="#fff" stroke={entry.color} strokeWidth="2" />
+              <text x={xForIndex(marker.index) + 5} y={Math.max(14, yForValue(marker.value) - 5)} fill={entry.color} fontSize="10">
+                {marker.label}
+              </text>
+            </g>
+          ))
+        )}
+        {eventMarkers.map((marker) => {
+          const x = xForIndex(Math.min(maxLength - 1, Math.max(0, marker.index)));
+          const y = height * marker.yPercent;
+          return (
+            <g key={marker.key}>
+              <title>{marker.label}</title>
+              {marker.iconUrl ? (
+                <image href={marker.iconUrl} x={x - 9} y={y - 9} width="18" height="18" opacity="0.92" />
+              ) : (
+                <circle cx={x} cy={y} r="4" fill={marker.color} />
+              )}
+              <line x1={x} x2={x} y1={y - 10} y2={height} stroke={marker.color} strokeOpacity="0.22" strokeDasharray="2 5" />
+            </g>
+          );
+        })}
+        <line
+          x1={xForIndex(effectiveIndex)}
+          x2={xForIndex(effectiveIndex)}
+          y1={0}
+          y2={height}
+          stroke="rgba(23, 32, 42, 0.4)"
+          strokeWidth="2"
+        />
+        <g>
+          <rect
+            x={Math.min(width - 58, Math.max(2, xForIndex(effectiveIndex) - 29))}
+            y={2}
+            width={56}
+            height={18}
+            rx={6}
+            fill="rgba(23, 32, 42, 0.86)"
+          />
+          <text
+            x={Math.min(width - 30, Math.max(30, xForIndex(effectiveIndex)))}
+            y={15}
+            textAnchor="middle"
+            fill="#fff"
+            fontSize="11"
+            fontWeight="700"
+          >
+            {formatTimelineMinute(timelineMinutes[effectiveIndex] ?? effectiveIndex)}
+          </text>
+        </g>
+        {series.map((entry, entryIndex) => {
+          const chartValues = entry.plotValues ?? entry.values;
+          const hoveredValue = entry.values[effectiveIndex];
+          const hoveredPlotValue = chartValues[effectiveIndex];
+          if (hoveredValue === undefined || hoveredPlotValue === undefined) return null;
+
+          const x = xForIndex(effectiveIndex);
+          const y = yForValue(hoveredPlotValue);
+          const labelX = x > width - 88 ? x - 70 : x + 8;
+          const labelY = Math.max(28, Math.min(height - 8, y - 8 + (entryIndex % 3) * 14));
+          const iconX = labelX;
+          const textX = entry.iconUrl ? labelX + 17 : labelX + 10;
+
+          return (
+            <g key={`${entry.key}-${title}-hover-label`}>
+              {entry.iconUrl ? (
+                <image href={entry.iconUrl} x={iconX} y={labelY - 13} width="14" height="14" opacity="0.96" />
+              ) : (
+                <circle cx={iconX + 4} cy={labelY - 5} r="4" fill={entry.color} stroke="#fff" strokeWidth="1.5" />
+              )}
+              <text
+                x={textX}
+                y={labelY}
+                fill={entry.color}
+                stroke="#fff"
+                strokeWidth="3"
+                paintOrder="stroke fill"
+                fontSize="10"
+                fontWeight="800"
+              >
+                {formatNumber(hoveredValue)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function TeamTimelinePanel({
+  radiantValues,
+  direValues,
+  timelineMinutes,
+  selectedMode,
+  title
+}: {
+  radiantValues: number[];
+  direValues: number[];
+  timelineMinutes: number[];
+  selectedMode: TimelineMode;
+  title?: string;
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const radiantStroke = getCssVar("--team-radiant-strong", "rgba(39, 174, 96, 0.95)");
+  const direStroke = getCssVar("--team-dire-strong", "rgba(192, 57, 43, 0.95)");
+  const perMinuteRadiantValues = perMinuteTimeline(radiantValues);
+  const perMinuteDireValues = perMinuteTimeline(direValues);
+  const cumulativeRadiantValues = totalTimeline(radiantValues);
+  const cumulativeDireValues = totalTimeline(direValues);
+  const activeRadiantValues = selectedMode === "perMinute" ? perMinuteRadiantValues : cumulativeRadiantValues;
+  const activeDireValues = selectedMode === "perMinute" ? perMinuteDireValues : cumulativeDireValues;
+  const effectiveIndex =
+    hoveredIndex === null
+      ? Math.max(activeRadiantValues.length, activeDireValues.length) - 1
+      : hoveredIndex;
+  const summarySeries = [
+    {
+      key: "radiant",
+      label: "Radiant",
+      color: radiantStroke,
+      value: activeRadiantValues[effectiveIndex] ?? activeRadiantValues[activeRadiantValues.length - 1] ?? 0
+    },
+    {
+      key: "dire",
+      label: "Dire",
+      color: direStroke,
+      value: activeDireValues[effectiveIndex] ?? activeDireValues[activeDireValues.length - 1] ?? 0
+    }
+  ];
+
+  return (
+    activeRadiantValues.length === 0 && activeDireValues.length === 0 ? (
+      <p className="muted-inline">No timeline data available for this tab.</p>
+    ) : (
+      <div className="stack compact">
+        <div className="timeline-hover-header">
+          <strong>
+            {formatTimelineMinute(
+              timelineMinutes[
+                hoveredIndex === null ? Math.max(activeRadiantValues.length, activeDireValues.length) - 1 : Math.max(0, hoveredIndex)
+              ] ??
+                (hoveredIndex === null ? Math.max(activeRadiantValues.length, activeDireValues.length) - 1 : hoveredIndex)
+            )}
+          </strong>
+        </div>
+        <div className="timeline-legend">
+          {summarySeries.map((entry) => (
+            <div key={entry.key} className="timeline-legend-item">
+              <span className="timeline-legend-swatch" style={{ backgroundColor: entry.color }} />
+              <strong>{entry.label}</strong>
+              <span className="timeline-row-values compact single">
+                <span>{formatNumber(entry.value)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+        <TimelinePlot
+          title={title ?? (selectedMode === "perMinute" ? "Per minute" : "Cumulative")}
+          series={[
+            {
+              key: selectedMode === "perMinute" ? "radiant-per-minute" : "radiant-cumulative",
+              label: "Radiant",
+              color: radiantStroke,
+              values: activeRadiantValues
+            },
+            {
+              key: selectedMode === "perMinute" ? "dire-per-minute" : "dire-cumulative",
+              label: "Dire",
+              color: direStroke,
+              values: activeDireValues
+            }
+          ]}
+          timelineMinutes={timelineMinutes}
+          hoveredIndex={hoveredIndex}
+          onHoveredIndexChange={setHoveredIndex}
+        />
+      </div>
+    )
+  );
+}
+
+function TeamTimelineOverlayPanel({
+  getValues,
+  players,
+  timelineMinutes,
+  selectedMode,
+  selectedTabs
+}: {
+  getValues: (tab: Exclude<TeamTimelineTab, "items">) => { radiant: number[]; dire: number[] };
+  players: TimelinePlayer[];
+  timelineMinutes: number[];
+  selectedMode: TimelineMode;
+  selectedTabs: OverlaySelection[];
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const selectedMetricTabs = selectedTabs.filter((entry) => entry.tab !== "items") as Array<{
+    tab: Exclude<TeamTimelineTab, "items">;
+    mode: TimelineMode;
+  }>;
+  const allSeries = selectedMetricTabs.flatMap((selection) => {
+    const tab = timelineTabs.find((entry) => entry.key === selection.tab);
+    const values = getValues(selection.tab);
+    const radiantValues = selection.mode === "perMinute" ? perMinuteTimeline(values.radiant) : totalTimeline(values.radiant);
+    const direValues = selection.mode === "perMinute" ? perMinuteTimeline(values.dire) : totalTimeline(values.dire);
+    const color = getTimelineMetricColor(selection.tab);
+    return [
+      {
+        key: `team-overlay-${selection.tab}-${selection.mode}-radiant`,
+        label: `${tab?.label ?? selection.tab} Radiant`,
+        color,
+        values: radiantValues,
+        plotValues: normalizeTimelineForOverlay(radiantValues),
+        strokeDasharray: selection.mode === "cumulative" ? "8 5" : undefined,
+        strokeWidth: 2.8
+      },
+      {
+        key: `team-overlay-${selection.tab}-${selection.mode}-dire`,
+        label: `${tab?.label ?? selection.tab} Dire`,
+        color,
+        values: direValues,
+        plotValues: normalizeTimelineForOverlay(direValues),
+        strokeDasharray: selection.mode === "cumulative" ? "8 5 2 5" : "2 6",
+        strokeWidth: 2.8
+      }
+    ];
+  });
+  const maxLength = Math.max(...allSeries.map((entry) => entry.values.length), timelineMinutes.length, 0);
+  const effectiveIndex = hoveredIndex === null ? maxLength - 1 : Math.min(maxLength - 1, Math.max(0, hoveredIndex));
+  const itemSelections = selectedTabs.filter((entry) => entry.tab === "items");
+  const itemMarkers = itemSelections.length > 0
+    ? players.flatMap((player, playerIndex) =>
+        getItemTimingEvents(player, itemSelections.every((entry) => entry.mode === "perMinute")).map((event, eventIndex) => ({
+          key: `team-item-${player.playerSlot ?? playerIndex}-${normalizeItemSlug(event.itemName)}-${event.time}-${eventIndex}`,
+          label: `${player.heroName ?? "Hero"}: ${event.itemName} at ${formatDuration(event.time)}`,
+          index: Math.max(0, Math.round(event.time / 60)),
+          yPercent: player.isRadiant ? 0.78 + (playerIndex % 5) * 0.025 : 0.9 + (playerIndex % 5) * 0.018,
+          iconUrl: getItemImageUrl(event.itemName),
+          color: player.isRadiant ? getCssVar("--team-radiant-strong", "#27ae60") : getCssVar("--team-dire-strong", "#c0392b")
+        }))
+      )
+    : [];
+
+  if (maxLength < 2 && itemMarkers.length === 0) {
+    return <p className="muted-inline">No timeline data available for overlay.</p>;
+  }
+
+  return (
+    <div className="stack compact">
+      <div className="timeline-hover-header">
+        <strong>{formatTimelineMinute(timelineMinutes[effectiveIndex] ?? effectiveIndex)}</strong>
+      </div>
+      <div className="timeline-overlay-legend">
+        {selectedMetricTabs.map((selection) => {
+          const tab = timelineTabs.find((entry) => entry.key === selection.tab);
+          const values = getValues(selection.tab);
+          const radiantValues = selection.mode === "perMinute" ? perMinuteTimeline(values.radiant) : totalTimeline(values.radiant);
+          const direValues = selection.mode === "perMinute" ? perMinuteTimeline(values.dire) : totalTimeline(values.dire);
+          return (
+            <div key={`team-overlay-legend-${selection.tab}-${selection.mode}`} className="timeline-overlay-legend-item">
+              <span className="timeline-legend-swatch" style={{ backgroundColor: getTimelineMetricColor(selection.tab) }} />
+              <TimelineMetricIcon type={selection.tab} />
+              <strong>{tab?.label ?? selection.tab}</strong>
+              <span>{selection.mode === "perMinute" ? "minute" : "total"}</span>
+              <span>R {formatNumber(radiantValues[effectiveIndex] ?? radiantValues[radiantValues.length - 1] ?? 0)}</span>
+              <span>D {formatNumber(direValues[effectiveIndex] ?? direValues[direValues.length - 1] ?? 0)}</span>
+            </div>
+          );
+        })}
+        {itemSelections.length > 0 ? (
+          <div className="timeline-overlay-legend-item">
+            <TimelineMetricIcon type="items" />
+            <strong>Items</strong>
+          </div>
+        ) : null}
+      </div>
+      <TimelinePlot
+        title={`Overlay - ${selectedMode === "perMinute" ? "per minute" : "cumulative"}`}
+        series={allSeries}
+        eventMarkers={itemMarkers}
+        timelineMinutes={timelineMinutes}
+        hoveredIndex={hoveredIndex}
+        onHoveredIndexChange={setHoveredIndex}
+      />
+    </div>
+  );
+}
+
+type TimelineTab = "gold" | "xp" | "lastHits" | "heroDamage" | "damageTaken" | "items";
+type TeamTimelineTab = "gold" | "xp" | "lastHits" | "heroDamage" | "damageTaken" | "items";
+type OverlayTimelineTab = Exclude<TimelineTab, "items"> | "items";
+type OverlaySelection = { tab: OverlayTimelineTab; mode: TimelineMode };
+
+const timelineTabs: Array<{ key: Exclude<TimelineTab, "items">; label: string; shortLabel: string }> = [
+  { key: "gold", label: "Gold", shortLabel: "G" },
+  { key: "xp", label: "XP", shortLabel: "XP" },
+  { key: "lastHits", label: "Last hits", shortLabel: "LH" },
+  { key: "heroDamage", label: "Hero damage", shortLabel: "HD" },
+  { key: "damageTaken", label: "Damage taken", shortLabel: "DT" }
+];
+
+function getTimelineMetricColor(type: Exclude<TimelineTab, "items">) {
+  const colors: Record<Exclude<TimelineTab, "items">, string> = {
+    gold: getCssVar("--metric-gold", "#c99700"),
+    xp: getCssVar("--metric-xp", "#5c7cfa"),
+    lastHits: getCssVar("--metric-last-hits", "#2f9e44"),
+    heroDamage: getCssVar("--metric-hero-damage", "#e03131"),
+    damageTaken: getCssVar("--metric-damage-taken", "#7048e8")
+  };
+  return colors[type];
+}
+
+function normalizeTimelineForOverlay(values: number[]) {
+  const maxValue = Math.max(...values.map((value) => Math.abs(value)), 1);
+  return values.map((value) => (value / maxValue) * 100);
+}
+
+function isOverlaySelectionActive(selections: OverlaySelection[], tab: OverlayTimelineTab, mode: TimelineMode) {
+  return selections.some((entry) => entry.tab === tab && entry.mode === mode);
+}
+
+function toggleOverlaySelection(current: OverlaySelection[], tab: OverlayTimelineTab, mode: TimelineMode) {
+  if (isOverlaySelectionActive(current, tab, mode)) {
+    const next = current.filter((entry) => !(entry.tab === tab && entry.mode === mode));
+    return next.length === 0 ? current : next;
+  }
+  return [...current, { tab, mode }];
+}
+
+function TimelineMetricIcon({ type }: { type: TimelineTab }) {
+  if (type === "gold") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M9 9h6M9 12h5M9 15h6" />
+      </svg>
+    );
+  }
+  if (type === "xp") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4l2.4 5 5.6.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.6-.8z" />
+      </svg>
+    );
+  }
+  if (type === "lastHits") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 18h14M7 15l4-9 2 6 2-4 2 7" />
+      </svg>
+    );
+  }
+  if (type === "heroDamage") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M13 3L5 14h6l-1 7 9-12h-6z" />
+      </svg>
+    );
+  }
+  if (type === "damageTaken") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3l7 3v5c0 5-3.1 8.3-7 10-3.9-1.7-7-5-7-10V6z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 7h12v10H6zM8 5h8M8 19h8" />
+    </svg>
+  );
+}
+
+type TimelinePlayer = {
+  playerId: number | null;
+  heroId: number | null;
+  heroName: string | null;
+  heroIconUrl: string | null;
+  isRadiant: boolean;
+  playerSlot: number | null;
+  goldTimeline: number[];
+  xpTimeline: number[];
+  lastHitsTimeline: number[];
+  heroDamageTimeline: number[];
+  damageTakenTimeline: number[];
+  firstPurchaseTimes: Record<string, number>;
+  itemUses: Record<string, number>;
+  purchaseLog: Array<{ time: number; key: string; charges: number | null }>;
+  observerLog: Array<{ time: number; x: number | null; y: number | null; z: number | null }>;
+  sentryLog: Array<{ time: number; x: number | null; y: number | null; z: number | null }>;
+  observerWardsPlaced: number | null;
+  sentryWardsPlaced: number | null;
+};
+
+function getPlayerTimelineValues(player: TimelinePlayer, tab: Exclude<TimelineTab, "items">) {
+  return tab === "gold"
+    ? player.goldTimeline
+    : tab === "xp"
+      ? player.xpTimeline
+      : tab === "lastHits"
+        ? player.lastHitsTimeline
+        : tab === "heroDamage"
+          ? player.heroDamageTimeline
+          : player.damageTakenTimeline;
+}
+
+function getSmokePurchaseCount(player: TimelinePlayer) {
+  return player.purchaseLog.filter((entry) => entry.key.toLowerCase().includes("smoke")).length;
+}
+
+function getSmokeUseCount(player: TimelinePlayer) {
+  return Object.entries(player.itemUses).reduce((sum, [key, value]) => {
+    return key.toLowerCase().includes("smoke") ? sum + value : sum;
+  }, 0);
+}
+
+function getItemTimingEvents(player: TimelinePlayer, onlyCoreItems: boolean) {
+  const fromFirstPurchase = Object.entries(player.firstPurchaseTimes).map(([itemName, time]) => ({
+    itemName,
+    time,
+    cost: getKnownItemCost(itemName)
+  }));
+  const fromPurchaseLog = player.purchaseLog.map((entry) => ({
+    itemName: entry.key,
+    time: entry.time,
+    cost: getKnownItemCost(entry.key)
+  }));
+
+  const deduped = new Map<string, { itemName: string; time: number; cost: number | null }>();
+  for (const event of [...fromFirstPurchase, ...fromPurchaseLog]) {
+    if (!Number.isFinite(event.time) || event.time < 0) continue;
+    if (onlyCoreItems && !isCoreTimelineItem(event.itemName)) continue;
+    const key = `${normalizeItemSlug(event.itemName)}-${event.time}`;
+    if (!deduped.has(key)) deduped.set(key, event);
+  }
+
+  return [...deduped.values()].sort((left, right) => left.time - right.time);
+}
+
+function ItemTimingTimeline({
+  players,
+  timelineMinutes,
+  onlyCoreItems
+}: {
+  players: TimelinePlayer[];
+  timelineMinutes: number[];
+  onlyCoreItems: boolean;
+}) {
+  const maxSeconds = Math.max((timelineMinutes[timelineMinutes.length - 1] ?? 0) * 60, ...players.flatMap((player) => getItemTimingEvents(player, onlyCoreItems).map((event) => event.time)), 1);
+  const rows = players.map((player) => ({
+    ...player,
+    key: `${player.playerSlot ?? "slot"}-${player.playerId ?? "anon"}-${player.heroId ?? "hero"}`,
+    events: getItemTimingEvents(player, onlyCoreItems)
+  }));
+  const radiantRows = rows.filter((player) => player.isRadiant);
+  const direRows = rows.filter((player) => !player.isRadiant);
+  const markers = Array.from({ length: Math.floor(maxSeconds / 600) }, (_, index) => (index + 1) * 600);
+
+  if (rows.every((player) => player.events.length === 0)) {
+    return <p className="muted-inline">No item timing data available for this view.</p>;
+  }
+
+  const renderRows = (sectionRows: typeof rows) =>
+    sectionRows.map((player) => (
+      <div key={player.key} className="item-timeline-row">
+        <div className="item-timeline-hero">
+          <IconImage src={player.heroIconUrl} alt={player.heroName ?? "Hero"} size="sm" />
+        </div>
+        <div className="item-timeline-track">
+          {markers.map((second) => (
+            <span key={`${player.key}-${second}`} className="item-timeline-marker" style={{ left: `${(second / maxSeconds) * 100}%` }} />
+          ))}
+          {player.events.map((event, index) => (
+            <span
+              key={`${player.key}-${normalizeItemSlug(event.itemName)}-${event.time}-${index}`}
+              className="item-timeline-event"
+              style={{ left: `${(event.time / maxSeconds) * 100}%` }}
+              title={`${player.heroName ?? "Hero"}: ${event.itemName} at ${formatDuration(event.time)}`}
+            >
+              <IconImage src={getItemImageUrl(event.itemName)} alt={event.itemName} size="sm" />
+            </span>
+          ))}
+        </div>
+      </div>
+    ));
+
+  return (
+    <div className="item-timeline">
+      <div className="timeline-hover-header">
+        <strong>{onlyCoreItems ? "Core and completed item timings" : "All item purchase timings"}</strong>
+      </div>
+      <div className="item-timeline-scale">
+        {markers.map((second) => (
+          <span key={second} style={{ left: `${(second / maxSeconds) * 100}%` }}>
+            {formatDuration(second)}
+          </span>
+        ))}
+      </div>
+      <div className="timeline-side-group">
+        <span className="eyebrow">Radiant</span>
+        {renderRows(radiantRows)}
+      </div>
+      <div className="timeline-side-group">
+        <span className="eyebrow">Dire</span>
+        {renderRows(direRows)}
+      </div>
+    </div>
+  );
+}
+
+function normalizeDotaMapCoordinate(value: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value >= 0 && value <= 1) return value * 100;
+  if (value >= 0 && value <= 255) return (value / 255) * 100;
+  const clamped = Math.max(-8200, Math.min(8200, value));
+  return ((clamped + 8200) / 16400) * 100;
+}
+
+function projectWardCoordinateToMinimapPercent(value: number | null) {
+  const normalized = normalizeDotaMapCoordinate(value);
+  if (normalized === null) return null;
+
+  // OpenDota/STRATZ ward coordinates land in a visibly compressed square on the minimap asset.
+  // Expand around center so ward overlays use the same visual scale as the map.
+  const scale = 1.539;
+  return Math.max(1.5, Math.min(98.5, 50 + (normalized - 50) * scale));
+}
+
+function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; durationSeconds: number | null }) {
+  const maxSecond = Math.max(
+    durationSeconds ?? 0,
+    ...players.flatMap((player) => [...player.observerLog, ...player.sentryLog].map((entry) => entry.time)),
+    1
+  );
+  const [selectedSecond, setSelectedSecond] = useState(maxSecond);
+  useEffect(() => {
+    setSelectedSecond(maxSecond);
+  }, [maxSecond]);
+
+  const wardEvents = players.flatMap((player) => {
+    const base = {
+      playerKey: `${player.playerSlot ?? "slot"}-${player.playerId ?? "anon"}-${player.heroId ?? "hero"}`,
+      heroName: player.heroName ?? "Hero",
+      heroIconUrl: player.heroIconUrl,
+      isRadiant: player.isRadiant
+    };
+    return [
+      ...player.observerLog.map((entry, index) => ({ ...base, ...entry, kind: "observer" as const, index })),
+      ...player.sentryLog.map((entry, index) => ({ ...base, ...entry, kind: "sentry" as const, index }))
+    ];
+  });
+  const activeWards = wardEvents
+    .filter((entry) => entry.time <= selectedSecond)
+    .map((entry) => ({
+      ...entry,
+      left: projectWardCoordinateToMinimapPercent(entry.x),
+      top: projectWardCoordinateToMinimapPercent(entry.y)
+    }))
+    .filter((entry): entry is typeof entry & { left: number; top: number } => entry.left !== null && entry.top !== null);
+  const radiantCount = activeWards.filter((entry) => entry.isRadiant).length;
+  const direCount = activeWards.length - radiantCount;
+
+  if (wardEvents.length === 0) {
+    return (
+      <Card title="Vision map">
+        <p className="muted-inline">No ward placement coordinates are available for this match.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title="Vision map"
+      extra={
+        <div className="vision-map-summary">
+          <span>{formatDuration(selectedSecond)}</span>
+          <span>Radiant {formatNumber(radiantCount)}</span>
+          <span>Dire {formatNumber(direCount)}</span>
+        </div>
+      }
+    >
+      <div className="vision-map-shell">
+        <div className="vision-map-controls">
+          <input
+            type="range"
+            min={0}
+            max={Math.ceil(maxSecond)}
+            value={Math.min(selectedSecond, Math.ceil(maxSecond))}
+            onChange={(event) => setSelectedSecond(Number(event.target.value))}
+          />
+          <p className="muted-inline">
+            Placement view only for now. Wards appear once placed; despawn/death timing needs the next telemetry ingestion pass.
+          </p>
+        </div>
+        <div className="vision-map-board" aria-label="Dota map ward placements">
+          <img className="vision-map-image" src="/api/assets/dota-map" alt="Dota 2 minimap" />
+          <span className="vision-map-label radiant">Radiant</span>
+          <span className="vision-map-label dire">Dire</span>
+          {activeWards.map((ward) => (
+            <span
+              key={`${ward.playerKey}-${ward.kind}-${ward.index}-${ward.time}`}
+              className={`vision-ward ${ward.kind} ${ward.isRadiant ? "radiant" : "dire"}`}
+              style={{ left: `${ward.left}%`, top: `${100 - ward.top}%` }}
+              title={`${ward.heroName}: ${ward.kind} at ${formatDuration(ward.time)}`}
+            >
+              <IconImage src={ward.heroIconUrl} alt={ward.heroName} size="sm" />
+            </span>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function MultiPlayerTimeline({
+  players,
+  timelineMinutes,
+  selectedTab,
+  selectedMode,
+  hiddenKeys,
+  onTogglePlayer,
+  title
+}: {
+  players: TimelinePlayer[];
+  timelineMinutes: number[];
+  selectedTab: TimelineTab;
+  selectedMode: TimelineMode;
+  hiddenKeys: string[];
+  onTogglePlayer: (key: string) => void;
+  title?: string;
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  if (selectedTab === "items") {
+    return <ItemTimingTimeline players={players} timelineMinutes={timelineMinutes} onlyCoreItems={selectedMode === "perMinute"} />;
+  }
+
+  const series = players.map((player) => ({
+    ...player,
+    key: `${player.playerSlot ?? "slot"}-${player.playerId ?? "anon"}-${player.heroId ?? "hero"}`,
+    perMinuteValues: perMinuteTimeline(getPlayerTimelineValues(player, selectedTab)),
+    cumulativeValues: totalTimeline(getPlayerTimelineValues(player, selectedTab))
+  }));
+  const visibleSeries = series.filter((player) => !hiddenKeys.includes(player.key));
+  const radiantPalette = getTimelinePalette("radiant");
+  const direPalette = getTimelinePalette("dire");
+  const maxLength = Math.max(...visibleSeries.map((player) => player.perMinuteValues.length), 0);
+  const effectiveIndex = hoveredIndex === null ? maxLength - 1 : Math.min(maxLength - 1, Math.max(0, hoveredIndex));
+
+  if (maxLength < 2) {
+    return <p className="muted-inline">No timeline data available for this tab.</p>;
+  }
+
+  const radiantSeries = series.filter((player) => player.isRadiant);
+  const direSeries = series.filter((player) => !player.isRadiant);
+  const buildColoredSeries = (entries: typeof visibleSeries, valueKey: "perMinuteValues" | "cumulativeValues") =>
+    entries.map((player) => {
+      const sideEntries = player.isRadiant ? radiantSeries : direSeries;
+      const palette = player.isRadiant ? radiantPalette : direPalette;
+      const sideIndex = sideEntries.findIndex((entry) => entry.key === player.key);
+      return {
+        key: `${player.key}-${valueKey}`,
+        label: player.heroName ?? "Hero",
+        iconUrl: player.heroIconUrl,
+        color: palette[(sideIndex < 0 ? 0 : sideIndex) % palette.length],
+        values: player[valueKey]
+      };
+    });
+  const perMinuteSeries = buildColoredSeries(visibleSeries, "perMinuteValues");
+  const cumulativeSeries = buildColoredSeries(visibleSeries, "cumulativeValues");
+  const activeSeries = selectedMode === "perMinute" ? perMinuteSeries : cumulativeSeries;
+  const levelMarkerSeries =
+    selectedTab === "xp" && selectedMode === "cumulative"
+      ? visibleSeries.map((player) => {
+          const sideEntries = player.isRadiant ? radiantSeries : direSeries;
+          const palette = player.isRadiant ? radiantPalette : direPalette;
+          const sideIndex = sideEntries.findIndex((entry) => entry.key === player.key);
+          return {
+            key: `${player.key}-levels`,
+            color: palette[(sideIndex < 0 ? 0 : sideIndex) % palette.length],
+            markers: getLevelMarkers(totalTimeline(player.xpTimeline))
+          };
+        })
+      : [];
+  const getCurrentValue = (player: (typeof series)[number]) =>
+    (selectedMode === "perMinute" ? player.perMinuteValues : player.cumulativeValues)[effectiveIndex] ??
+    (selectedMode === "perMinute" ? player.perMinuteValues : player.cumulativeValues)[
+      (selectedMode === "perMinute" ? player.perMinuteValues : player.cumulativeValues).length - 1
+    ] ??
+    0;
+
+  return (
+    <div className="timeline-layout">
+      <div className="timeline-side-list">
+        <div className="timeline-side-group">
+          <span className="eyebrow">Radiant</span>
+          {radiantSeries.map((player, index) => {
+            const color = radiantPalette[index % radiantPalette.length];
+            const hidden = hiddenKeys.includes(player.key);
+            return (
+              <button
+                key={player.key}
+                type="button"
+                className={`timeline-side-row ${hidden ? "hidden" : ""}`}
+                onClick={() => onTogglePlayer(player.key)}
+                title={player.heroName ?? "Hero"}
+              >
+                <span className="timeline-legend-swatch" style={{ backgroundColor: color }} />
+                <IconImage src={player.heroIconUrl} alt={player.heroName ?? "Hero"} size="sm" />
+                <span className="timeline-row-values single">
+                  <span>{formatNumber(getCurrentValue(player))}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="timeline-side-group">
+          <span className="eyebrow">Dire</span>
+          {direSeries.map((player, index) => {
+            const color = direPalette[index % direPalette.length];
+            const hidden = hiddenKeys.includes(player.key);
+            return (
+              <button
+                key={player.key}
+                type="button"
+                className={`timeline-side-row ${hidden ? "hidden" : ""}`}
+                onClick={() => onTogglePlayer(player.key)}
+                title={player.heroName ?? "Hero"}
+              >
+                <span className="timeline-legend-swatch" style={{ backgroundColor: color }} />
+                <IconImage src={player.heroIconUrl} alt={player.heroName ?? "Hero"} size="sm" />
+                <span className="timeline-row-values single">
+                  <span>{formatNumber(getCurrentValue(player))}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="timeline-main">
+        <div className="timeline-hover-header">
+          <strong>{formatTimelineMinute(timelineMinutes[effectiveIndex] ?? effectiveIndex)}</strong>
+        </div>
+        <TimelinePlot
+          title={title ?? (selectedMode === "perMinute" ? "Per minute" : "Cumulative")}
+          series={activeSeries}
+          markerSeries={levelMarkerSeries}
+          timelineMinutes={timelineMinutes}
+          hoveredIndex={hoveredIndex}
+          onHoveredIndexChange={setHoveredIndex}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MultiPlayerTimelineOverlay({
+  players,
+  timelineMinutes,
+  selectedMode,
+  selectedTabs,
+  hiddenKeys,
+  onTogglePlayer
+}: {
+  players: TimelinePlayer[];
+  timelineMinutes: number[];
+  selectedMode: TimelineMode;
+  selectedTabs: OverlaySelection[];
+  hiddenKeys: string[];
+  onTogglePlayer: (key: string) => void;
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const series = players.map((player) => ({
+    ...player,
+    key: `${player.playerSlot ?? "slot"}-${player.playerId ?? "anon"}-${player.heroId ?? "hero"}`
+  }));
+  const visibleSeries = series.filter((player) => !hiddenKeys.includes(player.key));
+  const radiantSeries = series.filter((player) => player.isRadiant);
+  const direSeries = series.filter((player) => !player.isRadiant);
+  const radiantPalette = getTimelinePalette("radiant");
+  const direPalette = getTimelinePalette("dire");
+  const selectedMetricTabs = selectedTabs.filter((entry) => entry.tab !== "items") as Array<{
+    tab: Exclude<TimelineTab, "items">;
+    mode: TimelineMode;
+  }>;
+  const allPlotSeries = visibleSeries.flatMap((player) =>
+    selectedMetricTabs.map((selection) => {
+      const baseValues = getPlayerTimelineValues(player, selection.tab);
+      const values = selection.mode === "perMinute" ? perMinuteTimeline(baseValues) : totalTimeline(baseValues);
+      const sideEntries = player.isRadiant ? radiantSeries : direSeries;
+      const sideIndex = sideEntries.findIndex((entry) => entry.key === player.key);
+      const sideColor = (player.isRadiant ? radiantPalette : direPalette)[(sideIndex < 0 ? 0 : sideIndex) % 5];
+      return {
+        key: `player-overlay-${player.key}-${selection.tab}-${selection.mode}`,
+        label: `${player.heroName ?? "Hero"} ${timelineTabs.find((entry) => entry.key === selection.tab)?.label ?? selection.tab}`,
+        iconUrl: player.heroIconUrl,
+        color: sideColor,
+        values,
+        plotValues: normalizeTimelineForOverlay(values),
+        strokeDasharray:
+          selection.mode === "cumulative"
+            ? "8 5"
+            : selection.tab === "gold"
+              ? undefined
+              : selection.tab === "xp"
+                ? "8 5"
+                : selection.tab === "lastHits"
+                  ? "3 5"
+                  : selection.tab === "heroDamage"
+                    ? "10 4 2 4"
+                    : "2 4",
+        opacity: 0.72,
+        strokeWidth: 2
+      };
+    })
+  );
+  const itemSelections = selectedTabs.filter((entry) => entry.tab === "items");
+  const itemMarkers = itemSelections.length > 0
+    ? visibleSeries.flatMap((player, playerIndex) =>
+        getItemTimingEvents(player, itemSelections.every((entry) => entry.mode === "perMinute")).map((event, eventIndex) => ({
+          key: `player-item-${player.key}-${normalizeItemSlug(event.itemName)}-${event.time}-${eventIndex}`,
+          label: `${player.heroName ?? "Hero"}: ${event.itemName} at ${formatDuration(event.time)}`,
+          index: Math.max(0, Math.round(event.time / 60)),
+          yPercent: 0.76 + (playerIndex % 10) * 0.022,
+          iconUrl: getItemImageUrl(event.itemName),
+          color: player.isRadiant ? getCssVar("--team-radiant-strong", "#27ae60") : getCssVar("--team-dire-strong", "#c0392b")
+        }))
+      )
+    : [];
+  const maxLength = Math.max(...allPlotSeries.map((entry) => entry.values.length), timelineMinutes.length, 0);
+  const effectiveIndex = hoveredIndex === null ? maxLength - 1 : Math.min(maxLength - 1, Math.max(0, hoveredIndex));
+
+  if (maxLength < 2 && itemMarkers.length === 0) {
+    return <p className="muted-inline">No timeline data available for overlay.</p>;
+  }
+
+  const renderHeroToggle = (player: (typeof series)[number], index: number) => {
+    const palette = player.isRadiant ? radiantPalette : direPalette;
+    const hidden = hiddenKeys.includes(player.key);
+    return (
+      <button
+        key={player.key}
+        type="button"
+        className={`timeline-side-row compact ${hidden ? "hidden" : ""}`}
+        onClick={() => onTogglePlayer(player.key)}
+        title={player.heroName ?? "Hero"}
+      >
+        <span className="timeline-legend-swatch" style={{ backgroundColor: palette[index % palette.length] }} />
+        <IconImage src={player.heroIconUrl} alt={player.heroName ?? "Hero"} size="sm" />
+      </button>
+    );
+  };
+
+  return (
+    <div className="timeline-layout">
+      <div className="timeline-side-list">
+        <div className="timeline-side-group">
+          <span className="eyebrow">Radiant</span>
+          {radiantSeries.map(renderHeroToggle)}
+        </div>
+        <div className="timeline-side-group">
+          <span className="eyebrow">Dire</span>
+          {direSeries.map(renderHeroToggle)}
+        </div>
+      </div>
+      <div className="timeline-main">
+        <div className="timeline-hover-header">
+          <strong>{formatTimelineMinute(timelineMinutes[effectiveIndex] ?? effectiveIndex)}</strong>
+        </div>
+        <div className="timeline-overlay-legend metric-only">
+          {selectedMetricTabs.map((selection) => (
+            <div key={`player-overlay-legend-${selection.tab}-${selection.mode}`} className="timeline-overlay-legend-item">
+              <span className="timeline-legend-swatch" style={{ backgroundColor: getTimelineMetricColor(selection.tab) }} />
+              <TimelineMetricIcon type={selection.tab} />
+              <strong>{timelineTabs.find((entry) => entry.key === selection.tab)?.label ?? selection.tab}</strong>
+              <span>{selection.mode === "perMinute" ? "minute" : "total"}</span>
+            </div>
+          ))}
+          {itemSelections.length > 0 ? (
+            <div className="timeline-overlay-legend-item">
+              <TimelineMetricIcon type="items" />
+              <strong>Items</strong>
+            </div>
+          ) : null}
+        </div>
+        <TimelinePlot
+          title={`Overlay - ${selectedMode === "perMinute" ? "per minute" : "cumulative"}`}
+          series={allPlotSeries}
+          eventMarkers={itemMarkers}
+          timelineMinutes={timelineMinutes}
+          hoveredIndex={hoveredIndex}
+          onHoveredIndexChange={setHoveredIndex}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function MatchPage() {
   const params = useParams();
   const matchId = params.matchId ? Number(params.matchId) : null;
   const query = useMatch(Number.isFinite(matchId) ? matchId : null);
+  const refreshMatch = useRefreshMatch(Number.isFinite(matchId) ? matchId : null);
+  const [timelineTab, setTimelineTab] = useState<TimelineTab>("gold");
+  const [timelineMode, setTimelineMode] = useState<TimelineMode>("perMinute");
+  const [teamTimelineTab, setTeamTimelineTab] = useState<TeamTimelineTab>("gold");
+  const [teamTimelineMode, setTeamTimelineMode] = useState<TimelineMode>("perMinute");
+  const [stackTeamTimelines, setStackTeamTimelines] = useState(false);
+  const [stackPlayerTimelines, setStackPlayerTimelines] = useState(false);
+  const [teamOverlayTabs, setTeamOverlayTabs] = useState<OverlaySelection[]>([
+    { tab: "gold", mode: "perMinute" },
+    { tab: "xp", mode: "cumulative" },
+    { tab: "items", mode: "perMinute" }
+  ]);
+  const [playerOverlayTabs, setPlayerOverlayTabs] = useState<OverlaySelection[]>([
+    { tab: "gold", mode: "perMinute" },
+    { tab: "xp", mode: "cumulative" },
+    { tab: "items", mode: "perMinute" }
+  ]);
+  const [hiddenTimelineKeys, setHiddenTimelineKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    setHiddenTimelineKeys([]);
+  }, [matchId]);
 
   const radiantPlayers = query.data?.participants.filter((player) => player.isRadiant) ?? [];
   const direPlayers = query.data?.participants.filter((player) => !player.isRadiant) ?? [];
+  const timelineMinutes = query.data?.timelineMinutes ?? [];
+  const buildTeamTimeline = (
+    players: typeof radiantPlayers,
+    key: "goldTimeline" | "xpTimeline" | "lastHitsTimeline" | "heroDamageTimeline" | "damageTakenTimeline"
+  ) => {
+    const normalized = players.map((player) => ({
+      ...player,
+      values: player[key]
+    }));
+    const length = Math.max(0, ...normalized.map((player) => player.values.length));
+    return Array.from({ length }, (_, index) =>
+      normalized.reduce((sum, player) => sum + (player.values[index] ?? 0), 0)
+    );
+  };
+  const radiantGoldTimeline = buildTeamTimeline(radiantPlayers, "goldTimeline");
+  const direGoldTimeline = buildTeamTimeline(direPlayers, "goldTimeline");
+  const radiantXpTimeline = buildTeamTimeline(radiantPlayers, "xpTimeline");
+  const direXpTimeline = buildTeamTimeline(direPlayers, "xpTimeline");
+  const radiantFarmTimeline = buildTeamTimeline(radiantPlayers, "lastHitsTimeline");
+  const direFarmTimeline = buildTeamTimeline(direPlayers, "lastHitsTimeline");
+  const radiantHeroDamageTimeline = buildTeamTimeline(radiantPlayers, "heroDamageTimeline");
+  const direHeroDamageTimeline = buildTeamTimeline(direPlayers, "heroDamageTimeline");
+  const radiantDamageTakenTimeline = buildTeamTimeline(radiantPlayers, "damageTakenTimeline");
+  const direDamageTakenTimeline = buildTeamTimeline(direPlayers, "damageTakenTimeline");
+  const getTeamTimelineValues = (tab: Exclude<TeamTimelineTab, "items">) => ({
+    radiant:
+      tab === "gold"
+        ? radiantGoldTimeline
+        : tab === "xp"
+          ? radiantXpTimeline
+          : tab === "lastHits"
+            ? radiantFarmTimeline
+            : tab === "heroDamage"
+              ? radiantHeroDamageTimeline
+              : radiantDamageTakenTimeline,
+    dire:
+      tab === "gold"
+        ? direGoldTimeline
+        : tab === "xp"
+          ? direXpTimeline
+          : tab === "lastHits"
+            ? direFarmTimeline
+            : tab === "heroDamage"
+              ? direHeroDamageTimeline
+              : direDamageTakenTimeline
+  });
+  const selectTeamTimeline = (tab: OverlayTimelineTab, mode: TimelineMode) => {
+    setTeamTimelineTab(tab);
+    setTeamTimelineMode(mode);
+    if (stackTeamTimelines) {
+      setTeamOverlayTabs((current) => toggleOverlaySelection(current, tab, mode));
+    }
+  };
+  const selectPlayerTimeline = (tab: OverlayTimelineTab, mode: TimelineMode) => {
+    setTimelineTab(tab);
+    setTimelineMode(mode);
+    if (stackPlayerTimelines) {
+      setPlayerOverlayTabs((current) => toggleOverlaySelection(current, tab, mode));
+    }
+  };
+  const hasAnyGoldTimeline = query.data?.participants.some((player) => player.goldTimeline.length > 0) ?? false;
+  const hasAnyXpTimeline = query.data?.participants.some((player) => player.xpTimeline.length > 0) ?? false;
+  const hasAnyLastHitsTimeline = query.data?.participants.some((player) => player.lastHitsTimeline.length > 0) ?? false;
+  const hasAnyHeroDamageTimeline =
+    query.data?.participants.some((player) => player.heroDamageTimeline.length > 0) ?? false;
+  const hasAnyDamageTakenTimeline =
+    query.data?.participants.some((player) => player.damageTakenTimeline.length > 0) ?? false;
+  const hasAnyItemTimings =
+    query.data?.participants.some((player) => Object.keys(player.firstPurchaseTimes).length > 0) ?? false;
+  const hasAnyPurchaseLog = query.data?.participants.some((player) => player.purchaseLog.length > 0) ?? false;
+  const hasAnyVisionData =
+    query.data?.participants.some(
+      (player) =>
+        player.observerLog.length > 0 ||
+        player.sentryLog.length > 0 ||
+        (player.observerWardsPlaced ?? 0) > 0 ||
+        (player.sentryWardsPlaced ?? 0) > 0
+    ) ?? false;
 
   return (
     <Page
       title={`Match ${params.matchId ?? ""}`}
       subtitle="Detailed match inspection sourced from cache when possible and OpenDota when needed."
+      aside={
+        matchId ? (
+          <button
+            type="button"
+            onClick={() => refreshMatch.mutate()}
+            disabled={refreshMatch.isPending}
+            title="Force a fresh OpenDota fetch and STRATZ telemetry enrichment for this match"
+          >
+            {refreshMatch.isPending ? "Refreshing..." : "Refresh data"}
+          </button>
+        ) : null
+      }
     >
       {query.isLoading ? <LoadingState label="Loading match detail…" /> : null}
       {query.error ? <ErrorState error={query.error as Error} /> : null}
+      {refreshMatch.error ? <ErrorState error={refreshMatch.error as Error} /> : null}
+      {refreshMatch.isSuccess ? <p className="success-inline">Match data refreshed.</p> : null}
       {query.data ? (
         <>
           <MetricGrid
@@ -58,30 +1498,8 @@ export function MatchPage() {
             ]}
           />
 
-          <div className="two-column">
-            <Card title="Why This Match Looks The Way It Does">
-              <div className="stack compact">
-                <p>
-                  Radiant finished {formatNumber(query.data.summary.radiantNetWorth - query.data.summary.direNetWorth)} net
-                  worth ahead and dealt {formatNumber(query.data.summary.radiantHeroDamage - query.data.summary.direHeroDamage)}
-                  {" "}more hero damage.
-                </p>
-                <p>
-                  Farm edge: {formatNumber(query.data.summary.radiantLastHits)} LH vs{" "}
-                  {formatNumber(query.data.summary.direLastHits)} LH.
-                </p>
-                <p>
-                  Pace edge: {formatNumber(query.data.summary.averageGpm.radiant)} avg GPM vs{" "}
-                  {formatNumber(query.data.summary.averageGpm.dire)} avg GPM.
-                </p>
-                <p>
-                  Players tracked: {query.data.summary.radiantPlayers + query.data.summary.direPlayers} /
-                  10.
-                </p>
-              </div>
-            </Card>
-
-            <Card title="Team comparison">
+          <div className="match-overview-grid">
+          <Card title="Team comparison">
               <div className="team-panels">
                 <div className="team-panel radiant">
                   <div className="team-panel-header">
@@ -125,51 +1543,333 @@ export function MatchPage() {
                 </div>
               </div>
             </Card>
+
+          <Card title="Draft overview">
+            {query.data.draft.length === 0 ? (
+              <p>No picks or bans were stored for this match.</p>
+            ) : (
+              <div className="draft-list">
+                {query.data.draft.map((event) => {
+                  const participant = query.data.participants.find((player) => player.heroId === event.heroId);
+                  return (
+                    <div key={`${event.team}-${event.orderIndex}-${event.heroId}`} className="draft-row">
+                      <span className="draft-order">#{event.orderIndex + 1}</span>
+                      <span className={`draft-type ${event.isPick ? "pick" : "ban"}`}>
+                        {event.team} {event.isPick ? "pick" : "ban"}
+                      </span>
+                      <span className="entity-link">
+                        <IconImage
+                          src={participant?.heroIconUrl}
+                          alt={event.heroName ?? `Hero ${event.heroId}`}
+                          size="sm"
+                        />
+                        <span>{event.heroName ?? event.heroId}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
           </div>
 
-          <div className="two-column">
-            <Card title="Match leaders">
-              <div className="leader-grid">
-                {Object.values(query.data.summary.leaders)
-                  .filter((leader) => leader !== null)
-                  .map((leader) => (
-                    <div key={leader.label} className="leader-card">
-                      <span className="eyebrow">{leader.label}</span>
-                      <strong>{formatNumber(leader.value)}</strong>
-                      <span>
-                        {leader.personaname ?? leader.playerId ?? "Anonymous"} on {leader.heroName ?? "Unknown"}
-                      </span>
-                      <span className="muted-inline">{leader.team}</span>
-                    </div>
-                  ))}
+          <Card title="Data availability">
+            <details className="card-details">
+              <summary>Show provider coverage and enrichment status</summary>
+              <div className="stack compact">
+                <div className="player-metrics">
+                  <div>
+                    <span className="eyebrow">Gold timeline</span>
+                    <strong>{hasAnyGoldTimeline ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">XP timeline</span>
+                    <strong>{hasAnyXpTimeline ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Last-hit timeline</span>
+                    <strong>{hasAnyLastHitsTimeline ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Hero damage timeline</span>
+                    <strong>{hasAnyHeroDamageTimeline ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Damage taken timeline</span>
+                    <strong>{hasAnyDamageTakenTimeline ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Item timings</span>
+                    <strong>{hasAnyItemTimings ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Purchase log</span>
+                    <strong>{hasAnyPurchaseLog ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Vision logs</span>
+                    <strong>{hasAnyVisionData ? "Available" : "Missing from provider"}</strong>
+                  </div>
+                </div>
+                <div className="stack compact">
+                  <p className="muted-inline">
+                    OpenDota: {summarizeProviderStatus(query.data.telemetryStatus.openDota)}
+                  </p>
+                  <p className="muted-inline">
+                    STRATZ: {summarizeProviderStatus(query.data.telemetryStatus.stratz)}
+                  </p>
+                </div>
+                {shouldShowProviderDetails(query.data.telemetryStatus.openDota) ? (
+                  <p className="muted-inline">OpenDota detail: {query.data.telemetryStatus.openDota.message}</p>
+                ) : null}
+                {shouldShowProviderDetails(query.data.telemetryStatus.stratz) ? (
+                  <p className="muted-inline">STRATZ detail: {query.data.telemetryStatus.stratz.message}</p>
+                ) : null}
               </div>
+            </details>
+          </Card>
+
+          <VisionMap players={query.data.participants} durationSeconds={query.data.durationSeconds} />
+
+          <div className="timeline-section-stack">
+            <Card
+              title="Team timelines"
+              extra={
+                <div className="split-tab-grid">
+                {timelineTabs.map((tab) => (
+                  <div key={tab.key} className="split-tab-group">
+                    <span className="split-tab-icon" title={tab.label}>
+                      <TimelineMetricIcon type={tab.key} />
+                    </span>
+                    <button
+                      type="button"
+                      className={`split-tab-button ${
+                        stackTeamTimelines
+                          ? isOverlaySelectionActive(teamOverlayTabs, tab.key, "perMinute")
+                            ? "active"
+                            : ""
+                          : teamTimelineTab === tab.key && teamTimelineMode === "perMinute"
+                            ? "active"
+                            : ""
+                      }`}
+                      aria-label={`${tab.label} per minute`}
+                      title={`${tab.label} per minute`}
+                      onClick={() => selectTeamTimeline(tab.key, "perMinute")}
+                    />
+                    <button
+                      type="button"
+                      className={`split-tab-button ${
+                        stackTeamTimelines
+                          ? isOverlaySelectionActive(teamOverlayTabs, tab.key, "cumulative")
+                            ? "active"
+                            : ""
+                          : teamTimelineTab === tab.key && teamTimelineMode === "cumulative"
+                            ? "active"
+                            : ""
+                      }`}
+                      aria-label={`${tab.label} cumulative`}
+                      title={`${tab.label} cumulative`}
+                      onClick={() => selectTeamTimeline(tab.key, "cumulative")}
+                    />
+                  </div>
+                ))}
+                <div className="split-tab-group">
+                  <span className="split-tab-icon" title="Items">
+                    <TimelineMetricIcon type="items" />
+                  </span>
+                  <button
+                    type="button"
+                    className={`split-tab-button ${
+                      stackTeamTimelines
+                        ? isOverlaySelectionActive(teamOverlayTabs, "items", "perMinute")
+                          ? "active"
+                          : ""
+                        : teamTimelineTab === "items" && teamTimelineMode === "perMinute"
+                          ? "active"
+                          : ""
+                    }`}
+                    aria-label="Items core and completed"
+                    title="Items: core/completed"
+                    onClick={() => selectTeamTimeline("items", "perMinute")}
+                  />
+                  <button
+                    type="button"
+                    className={`split-tab-button ${
+                      stackTeamTimelines
+                        ? isOverlaySelectionActive(teamOverlayTabs, "items", "cumulative")
+                          ? "active"
+                          : ""
+                        : teamTimelineTab === "items" && teamTimelineMode === "cumulative"
+                          ? "active"
+                          : ""
+                    }`}
+                    aria-label="Items all purchases"
+                    title="Items: all purchases"
+                    onClick={() => selectTeamTimeline("items", "cumulative")}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className={`timeline-stack-toggle ${stackTeamTimelines ? "active" : ""}`}
+                  onClick={() =>
+                    setStackTeamTimelines((value) => {
+                      const next = !value;
+                      if (next && teamOverlayTabs.length === 0) {
+                        setTeamOverlayTabs([{ tab: teamTimelineTab, mode: teamTimelineMode }]);
+                      }
+                      return next;
+                    })
+                  }
+                >
+                  Overlay
+                </button>
+                </div>
+              }
+            >
+              {stackTeamTimelines ? (
+                <TeamTimelineOverlayPanel
+                  getValues={getTeamTimelineValues}
+                  players={query.data.participants}
+                  timelineMinutes={timelineMinutes}
+                  selectedMode={teamTimelineMode}
+                  selectedTabs={teamOverlayTabs}
+                />
+              ) : teamTimelineTab === "items" ? (
+                <ItemTimingTimeline
+                  players={query.data.participants}
+                  timelineMinutes={timelineMinutes}
+                  onlyCoreItems={teamTimelineMode === "perMinute"}
+                />
+              ) : (
+                <TeamTimelinePanel
+                  radiantValues={getTeamTimelineValues(teamTimelineTab).radiant}
+                  direValues={getTeamTimelineValues(teamTimelineTab).dire}
+                  timelineMinutes={timelineMinutes}
+                  selectedMode={teamTimelineMode}
+                />
+              )}
             </Card>
 
-            <Card title="Draft overview">
-              {query.data.draft.length === 0 ? (
-                <p>No picks or bans were stored for this match.</p>
-              ) : (
-                <div className="draft-list">
-                  {query.data.draft.map((event) => {
-                    const participant = query.data.participants.find((player) => player.heroId === event.heroId);
-                    return (
-                      <div key={`${event.team}-${event.orderIndex}-${event.heroId}`} className="draft-row">
-                        <span className="draft-order">#{event.orderIndex + 1}</span>
-                        <span className={`draft-type ${event.isPick ? "pick" : "ban"}`}>
-                          {event.team} {event.isPick ? "pick" : "ban"}
-                        </span>
-                        <span className="entity-link">
-                          <IconImage
-                            src={participant?.heroIconUrl}
-                            alt={event.heroName ?? `Hero ${event.heroId}`}
-                            size="sm"
-                          />
-                          <span>{event.heroName ?? event.heroId}</span>
-                        </span>
-                      </div>
-                    );
-                  })}
+            <Card
+              title="Player timelines"
+              extra={
+                <div className="split-tab-grid">
+                {timelineTabs.map((tab) => (
+                  <div key={tab.key} className="split-tab-group">
+                    <span className="split-tab-icon" title={tab.label}>
+                      <TimelineMetricIcon type={tab.key} />
+                    </span>
+                    <button
+                      type="button"
+                      className={`split-tab-button ${
+                        stackPlayerTimelines
+                          ? isOverlaySelectionActive(playerOverlayTabs, tab.key, "perMinute")
+                            ? "active"
+                            : ""
+                          : timelineTab === tab.key && timelineMode === "perMinute"
+                            ? "active"
+                            : ""
+                      }`}
+                      aria-label={`${tab.label} per minute`}
+                      title={`${tab.label} per minute`}
+                      onClick={() => selectPlayerTimeline(tab.key, "perMinute")}
+                    />
+                    <button
+                      type="button"
+                      className={`split-tab-button ${
+                        stackPlayerTimelines
+                          ? isOverlaySelectionActive(playerOverlayTabs, tab.key, "cumulative")
+                            ? "active"
+                            : ""
+                          : timelineTab === tab.key && timelineMode === "cumulative"
+                            ? "active"
+                            : ""
+                      }`}
+                      aria-label={`${tab.label} cumulative`}
+                      title={`${tab.label} cumulative`}
+                      onClick={() => selectPlayerTimeline(tab.key, "cumulative")}
+                    />
+                  </div>
+                ))}
+                <div className="split-tab-group">
+                  <span className="split-tab-icon" title="Items">
+                    <TimelineMetricIcon type="items" />
+                  </span>
+                  <button
+                    type="button"
+                    className={`split-tab-button ${
+                      stackPlayerTimelines
+                        ? isOverlaySelectionActive(playerOverlayTabs, "items", "perMinute")
+                          ? "active"
+                          : ""
+                        : timelineTab === "items" && timelineMode === "perMinute"
+                          ? "active"
+                          : ""
+                    }`}
+                    aria-label="Items core and completed"
+                    title="Items: core/completed"
+                    onClick={() => selectPlayerTimeline("items", "perMinute")}
+                  />
+                  <button
+                    type="button"
+                    className={`split-tab-button ${
+                      stackPlayerTimelines
+                        ? isOverlaySelectionActive(playerOverlayTabs, "items", "cumulative")
+                          ? "active"
+                          : ""
+                        : timelineTab === "items" && timelineMode === "cumulative"
+                          ? "active"
+                          : ""
+                    }`}
+                    aria-label="Items all purchases"
+                    title="Items: all purchases"
+                    onClick={() => selectPlayerTimeline("items", "cumulative")}
+                  />
                 </div>
+                <button
+                  type="button"
+                  className={`timeline-stack-toggle ${stackPlayerTimelines ? "active" : ""}`}
+                  onClick={() =>
+                    setStackPlayerTimelines((value) => {
+                      const next = !value;
+                      if (next && playerOverlayTabs.length === 0) {
+                        setPlayerOverlayTabs([{ tab: timelineTab, mode: timelineMode }]);
+                      }
+                      return next;
+                    })
+                  }
+                >
+                  Overlay
+                </button>
+                </div>
+              }
+            >
+              {stackPlayerTimelines ? (
+                <MultiPlayerTimelineOverlay
+                  players={query.data.participants}
+                  timelineMinutes={timelineMinutes}
+                  selectedMode={timelineMode}
+                  selectedTabs={playerOverlayTabs}
+                  hiddenKeys={hiddenTimelineKeys}
+                  onTogglePlayer={(key) =>
+                    setHiddenTimelineKeys((current) =>
+                      current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key]
+                    )
+                  }
+                />
+              ) : (
+                <MultiPlayerTimeline
+                  players={query.data.participants}
+                  timelineMinutes={timelineMinutes}
+                  selectedTab={timelineTab}
+                  selectedMode={timelineMode}
+                  hiddenKeys={hiddenTimelineKeys}
+                  onTogglePlayer={(key) =>
+                    setHiddenTimelineKeys((current) =>
+                      current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key]
+                    )
+                  }
+                />
               )}
             </Card>
           </div>
@@ -260,23 +1960,35 @@ export function MatchPage() {
                           {player.items.length === 0 ? (
                             <p className="muted-inline">No tracked items for this player.</p>
                           ) : (
-                            <>
-                              <div className="item-icon-strip">
-                                {player.items.map((item) => (
-                                  <span key={`${item.name}-${item.imageUrl ?? "none"}`} className="item-slot" title={item.name}>
-                                    <IconImage src={item.imageUrl} alt={item.name} size="sm" rounded={false} />
-                                  </span>
-                                ))}
-                              </div>
-                              <div className="item-name-list">
-                                {player.items.map((item) => (
-                                  <span key={`${item.name}-label`} className="item-name-chip">
-                                    {item.name}
-                                  </span>
-                                ))}
-                              </div>
-                            </>
+                            <div className="item-icon-strip">
+                              {player.items.map((item) => (
+                                <span key={`${item.name}-${item.imageUrl ?? "none"}`} className="item-slot" title={item.name}>
+                                  <IconImage src={item.imageUrl} alt={item.name} size="sm" rounded={false} />
+                                </span>
+                              ))}
+                            </div>
                           )}
+                        </div>
+
+                        <div className="player-build">
+                          <span className="eyebrow">Vision and utility</span>
+                          <div className="player-metrics">
+                            <div>
+                              <span className="eyebrow">Observers</span>
+                              <strong>{formatNumber(player.observerWardsPlaced)}</strong>
+                            </div>
+                            <div>
+                              <span className="eyebrow">Sentries</span>
+                              <strong>{formatNumber(player.sentryWardsPlaced)}</strong>
+                            </div>
+                            <div>
+                              <span className="eyebrow">Smokes</span>
+                              <strong>
+                                {formatNumber(getSmokeUseCount(player))}
+                                <span className="muted-inline"> used / {formatNumber(getSmokePurchaseCount(player))} bought</span>
+                              </strong>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     );

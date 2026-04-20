@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx scripts/dev.ts",
     "build": "npm run build -w @dota/shared && npm run build -w @dota/backend && npm run build -w @dota/frontend",
-    "start": "tsx scripts/start-local.ts",
+    "start": "node scripts/start-local.mjs",
     "db:migrate": "npm run db:migrate -w @dota/backend",
     "smoke": "tsx scripts/smoke.ts"
   },

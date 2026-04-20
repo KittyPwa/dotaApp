@@ -20,10 +20,26 @@ if (config.nodeEnv === "production") {
     prefix: "/"
   });
 
+  const serveFrontend = async (_request: unknown, reply: { sendFile: (name: string) => unknown }) => reply.sendFile("index.html");
+
+  await app.get("/home", serveFrontend);
+  await app.get("/dashboard", serveFrontend);
+  await app.get("/settings", serveFrontend);
+  await app.get("/compare", serveFrontend);
+  await app.get("/heroes", serveFrontend);
+  await app.get("/heroes/:heroId", serveFrontend);
+  await app.get("/players/:playerId", serveFrontend);
+  await app.get("/matches/:matchId", serveFrontend);
+
   app.setNotFoundHandler(async (request, reply) => {
     if (request.url.startsWith("/api/")) {
       reply.code(404);
       return { message: "Route not found." };
+    }
+
+    if (request.url.startsWith("/assets/")) {
+      reply.code(404);
+      return { message: "Asset not found." };
     }
 
     return reply.sendFile("index.html");
@@ -40,7 +56,13 @@ const address = await app.listen({
 logger.info("Backend listening", { address });
 
 if (config.openBrowser && config.nodeEnv === "production") {
-  await open(address);
+  try {
+    await open(address);
+  } catch (error) {
+    logger.warn("Backend is running, but opening the browser failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 const shutdown = async () => {

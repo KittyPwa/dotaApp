@@ -1,0 +1,5 @@
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%SCRIPT_DIR%Install-DotaLocalAnalytics.ps1"
+if errorlevel 1 pause

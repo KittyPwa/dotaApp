@@ -19,9 +19,7 @@ try {
       try {
         await open(address);
       } catch (error) {
-        console.warn(
-          `App is running, but opening the browser failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        console.warn(`App is running, but opening the browser failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     process.exit(0);
@@ -30,9 +28,8 @@ try {
   // No healthy local server is active; continue with normal startup.
 }
 
-const child = spawn("node", [backendEntry], {
+const child = spawn(process.execPath, [backendEntry], {
   stdio: "inherit",
-  shell: true,
   env: {
     ...process.env,
     NODE_ENV: "production",
@@ -40,7 +37,10 @@ const child = spawn("node", [backendEntry], {
   }
 });
 
-const teardown = () => child.kill();
+const teardown = () => {
+  if (!child.killed) child.kill();
+};
+
 process.on("SIGINT", teardown);
 process.on("SIGTERM", teardown);
 process.on("exit", teardown);

@@ -3,6 +3,9 @@ import type {
   DashboardResponse,
   HeroOverview,
   HeroStat,
+  LeagueOverview,
+  LeagueSummary,
+  LeagueSyncResponse,
   MatchOverview,
   PlayerCompareResponse,
   PlayerOverview,
@@ -32,6 +35,35 @@ export function useHero(heroId: number | null) {
   });
 }
 
+export function useLeagues() {
+  return useQuery({
+    queryKey: ["leagues"],
+    queryFn: () => apiGet<LeagueSummary[]>("/api/leagues")
+  });
+}
+
+export function useLeague(leagueId: number | null) {
+  return useQuery({
+    queryKey: ["league", leagueId],
+    queryFn: () => apiGet<LeagueOverview>(`/api/leagues/${leagueId}`),
+    enabled: leagueId !== null
+  });
+}
+
+export function useSyncLeague(leagueId: number | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (limit: number) => apiPost<LeagueSyncResponse>(`/api/leagues/${leagueId}/sync`, { limit }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["league", leagueId] });
+      await queryClient.invalidateQueries({ queryKey: ["leagues"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
+    }
+  });
+}
+
 export function usePlayer(playerId: number | null) {
   return useQuery({
     queryKey: ["player", playerId],
@@ -45,6 +77,20 @@ export function useMatch(matchId: number | null) {
     queryKey: ["match", matchId],
     queryFn: () => apiGet<MatchOverview>(`/api/matches/${matchId}`),
     enabled: matchId !== null
+  });
+}
+
+export function useRefreshMatch(matchId: number | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => apiPost<MatchOverview>(`/api/matches/${matchId}/refresh`, {}),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["match", matchId] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero"] });
+    }
   });
 }
 
@@ -74,6 +120,9 @@ export function useSaveSettings() {
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       await queryClient.invalidateQueries({ queryKey: ["player"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero"] });
+      await queryClient.invalidateQueries({ queryKey: ["player-compare"] });
     }
   });
 }

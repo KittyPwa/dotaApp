@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
+import type BetterSqlite3 from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { config } from "../utils/config.js";
 import { schema } from "./schema.js";
@@ -22,6 +23,7 @@ try {
 sqlite.pragma("foreign_keys = ON");
 
 export const db = drizzle(sqlite, { schema });
+export const sqliteDb: BetterSqlite3.Database = sqlite;
 
 function ensureColumn(table: string, column: string, definition: string) {
   const rows = sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -36,6 +38,27 @@ export function runMigrations() {
     "utf8"
   );
   sqlite.exec(migrationSql);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS provider_request_events (
+      id integer primary key autoincrement,
+      provider text not null,
+      requested_at integer not null
+    );
+    CREATE INDEX IF NOT EXISTS provider_request_events_provider_requested_at_idx
+      ON provider_request_events(provider, requested_at);
+  `);
+  ensureColumn("players", "rank_tier", "integer");
+  ensureColumn("players", "leaderboard_rank", "integer");
+  ensureColumn("match_players", "gold_t_json", "text");
+  ensureColumn("match_players", "xp_t_json", "text");
+  ensureColumn("match_players", "lh_t_json", "text");
+  ensureColumn("match_players", "dn_t_json", "text");
+  ensureColumn("match_players", "item_uses_json", "text");
+  ensureColumn("match_players", "purchase_log_json", "text");
+  ensureColumn("match_players", "obs_log_json", "text");
+  ensureColumn("match_players", "sen_log_json", "text");
+  ensureColumn("match_players", "obs_placed", "integer");
+  ensureColumn("match_players", "sen_placed", "integer");
   ensureColumn("heroes", "icon_path", "text");
   ensureColumn("heroes", "portrait_path", "text");
   ensureColumn("items", "image_path", "text");
@@ -43,4 +66,24 @@ export function runMigrations() {
 
 export function closeDb() {
   sqlite.close();
+}
+
+export function checkDbHealth() {
+  try {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS app_health_checks (
+        id integer primary key autoincrement,
+        checked_at integer not null
+      );
+    `);
+    const result = sqlite
+      .prepare("insert into app_health_checks (checked_at) values (?) returning id")
+      .get(Date.now()) as { id?: number } | undefined;
+    if (result?.id) {
+      sqlite.prepare("delete from app_health_checks where id = ?").run(result.id);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

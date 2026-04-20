@@ -7,6 +7,8 @@ export const players = sqliteTable("players", {
   avatar: text("avatar"),
   profileUrl: text("profile_url"),
   countryCode: text("country_code"),
+  rankTier: integer("rank_tier"),
+  leaderboardRank: integer("leaderboard_rank"),
   providerSource: text("provider_source").notNull().default("opendota"),
   lastProfileFetchedAt: integer("last_profile_fetched_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
@@ -85,7 +87,17 @@ export const matchPlayers = sqliteTable(
     backpack0: integer("backpack_0"),
     backpack1: integer("backpack_1"),
     backpack2: integer("backpack_2"),
+    goldTJson: text("gold_t_json"),
+    xpTJson: text("xp_t_json"),
+    lhTJson: text("lh_t_json"),
+    dnTJson: text("dn_t_json"),
     firstPurchaseTimeJson: text("first_purchase_time_json"),
+    itemUsesJson: text("item_uses_json"),
+    purchaseLogJson: text("purchase_log_json"),
+    obsLogJson: text("obs_log_json"),
+    senLogJson: text("sen_log_json"),
+    obsPlaced: integer("obs_placed"),
+    senPlaced: integer("sen_placed"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -159,6 +171,21 @@ export const settings = sqliteTable("settings", {
     .default(sql`(unixepoch() * 1000)`)
 });
 
+export const providerRequestEvents = sqliteTable(
+  "provider_request_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    provider: text("provider").notNull(),
+    requestedAt: integer("requested_at", { mode: "timestamp_ms" }).notNull()
+  },
+  (table) => ({
+    providerRequestedAtIdx: index("provider_request_events_provider_requested_at_idx").on(
+      table.provider,
+      table.requestedAt
+    )
+  })
+);
+
 export const schema = {
   players,
   heroes,
@@ -169,5 +196,6 @@ export const schema = {
   leagues,
   drafts,
   rawApiPayloads,
-  settings
+  settings,
+  providerRequestEvents
 };
