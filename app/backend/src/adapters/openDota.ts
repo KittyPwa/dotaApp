@@ -19,6 +19,7 @@ export interface OpenDotaRecentMatch {
   radiant_win: boolean;
   duration: number | null;
   game_mode: number | null;
+  lobby_type?: number | null;
   hero_id: number | null;
   start_time: number | null;
   kills: number | null;
@@ -53,6 +54,8 @@ export interface OpenDotaMatchResponse {
   duration?: number;
   start_time?: number;
   radiant_win?: boolean;
+  game_mode?: number;
+  lobby_type?: number;
   radiant_score?: number;
   dire_score?: number;
   patch?: number;
@@ -70,6 +73,7 @@ export interface OpenDotaMatchResponse {
     gold_per_min?: number;
     xp_per_min?: number;
     hero_damage?: number;
+    hero_healing?: number;
     tower_damage?: number;
     last_hits?: number;
     denies?: number;
@@ -80,6 +84,7 @@ export interface OpenDotaMatchResponse {
     item_3?: number;
     item_4?: number;
     item_5?: number;
+    item_neutral?: number;
     backpack_0?: number;
     backpack_1?: number;
     backpack_2?: number;
@@ -88,12 +93,17 @@ export interface OpenDotaMatchResponse {
     lh_t?: number[];
     dn_t?: number[];
     first_purchase_time?: Record<string, number>;
+    ability_upgrades_arr?: number[];
+    ability_upgrades?: Array<{ ability?: number; time?: number; level?: number }>;
     item_uses?: Record<string, number>;
     purchase_log?: Array<{ time?: number; key?: string; charges?: number }>;
     obs_log?: Array<{ time?: number; x?: number; y?: number; z?: number }>;
     sen_log?: Array<{ time?: number; x?: number; y?: number; z?: number }>;
     obs_placed?: number;
     sen_placed?: number;
+    observer_kills?: number;
+    camps_stacked?: number;
+    courier_kills?: number;
   }>;
   picks_bans?: Array<{
     is_pick: boolean;
@@ -129,6 +139,16 @@ export interface OpenDotaPatchResponseItem {
   name: string;
   date?: string;
 }
+
+export type OpenDotaAbilityIdsResponse = Record<string, string>;
+
+export type OpenDotaAbilitiesResponse = Record<
+  string,
+  {
+    dname?: string;
+    img?: string;
+  }
+>;
 
 export class OpenDotaAdapter {
   private readonly baseUrl = "https://api.opendota.com/api";
@@ -255,6 +275,26 @@ export class OpenDotaAdapter {
     const fetchedAt = Date.now();
     const payload = await fetchJsonWithRetry<OpenDotaPatchResponseItem[]>(
       this.buildUrl("/constants/patch"),
+      { headers: { Accept: "application/json" } },
+      { provider: "opendota" }
+    );
+    return { payload, fetchedAt };
+  }
+
+  async getAbilityIds(): Promise<ProviderFetchResult<OpenDotaAbilityIdsResponse>> {
+    const fetchedAt = Date.now();
+    const payload = await fetchJsonWithRetry<OpenDotaAbilityIdsResponse>(
+      this.buildUrl("/constants/ability_ids"),
+      { headers: { Accept: "application/json" } },
+      { provider: "opendota" }
+    );
+    return { payload, fetchedAt };
+  }
+
+  async getAbilities(): Promise<ProviderFetchResult<OpenDotaAbilitiesResponse>> {
+    const fetchedAt = Date.now();
+    const payload = await fetchJsonWithRetry<OpenDotaAbilitiesResponse>(
+      this.buildUrl("/constants/abilities"),
       { headers: { Accept: "application/json" } },
       { provider: "opendota" }
     );

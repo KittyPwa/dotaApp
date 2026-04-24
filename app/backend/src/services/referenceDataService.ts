@@ -26,21 +26,37 @@ export class ReferenceDataService {
       .where(eq(rawApiPayloads.entityType, "hero_stats"))
       .orderBy(desc(rawApiPayloads.fetchedAt))
       .limit(1);
+    const [latestAbilityIdsFetch] = await db
+      .select()
+      .from(rawApiPayloads)
+      .where(eq(rawApiPayloads.entityType, "ability_ids"))
+      .orderBy(desc(rawApiPayloads.fetchedAt))
+      .limit(1);
+    const [latestAbilitiesFetch] = await db
+      .select()
+      .from(rawApiPayloads)
+      .where(eq(rawApiPayloads.entityType, "abilities"))
+      .orderBy(desc(rawApiPayloads.fetchedAt))
+      .limit(1);
 
     if (
       !heroWithoutIcons &&
       !itemWithoutImage &&
       !placeholderPatch &&
       latestHeroFetch?.fetchedAt &&
+      latestAbilityIdsFetch?.fetchedAt &&
+      latestAbilitiesFetch?.fetchedAt &&
       Date.now() - latestHeroFetch.fetchedAt.getTime() < config.staleWindows.referenceDataMs
     ) {
       return;
     }
 
-    const [heroStats, itemDictionary, patchList] = await Promise.all([
+    const [heroStats, itemDictionary, patchList, abilityIds, abilities] = await Promise.all([
       this.openDota.getHeroStats(),
       this.openDota.getItems(),
-      this.openDota.getPatches()
+      this.openDota.getPatches(),
+      this.openDota.getAbilityIds(),
+      this.openDota.getAbilities()
     ]);
 
     await this.rawPayloadService.store({
@@ -65,6 +81,22 @@ export class ReferenceDataService {
       entityId: "all",
       fetchedAt: patchList.fetchedAt,
       rawJson: patchList.payload
+    });
+
+    await this.rawPayloadService.store({
+      provider: "opendota",
+      entityType: "ability_ids",
+      entityId: "all",
+      fetchedAt: abilityIds.fetchedAt,
+      rawJson: abilityIds.payload
+    });
+
+    await this.rawPayloadService.store({
+      provider: "opendota",
+      entityType: "abilities",
+      entityId: "all",
+      fetchedAt: abilities.fetchedAt,
+      rawJson: abilities.payload
     });
 
     const now = new Date();

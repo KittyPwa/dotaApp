@@ -4,6 +4,7 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { IconImage } from "../components/IconImage";
 import { Page } from "../components/Page";
+import { StatsRadarChart } from "../components/StatsRadarChart";
 import { EmptyState, ErrorState, LoadingState } from "../components/State";
 import { TableCard } from "../components/TableCard";
 import { usePagination } from "../hooks/usePagination";
@@ -21,6 +22,7 @@ export function PlayerComparePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [inputValue, setInputValue] = useState(searchParams.get("ids") ?? "");
   const [selectedComboKey, setSelectedComboKey] = useState<string | null>(null);
+  const [hiddenRadarPlayerIds, setHiddenRadarPlayerIds] = useState<number[]>([]);
   const [pairSort, setPairSort] = useState<{ key: "players" | "games" | "record" | "winrate"; direction: "asc" | "desc" }>({
     key: "games",
     direction: "desc"
@@ -94,6 +96,7 @@ export function PlayerComparePage() {
     const nextValue = uniqueIds.join(",");
     setInputValue(nextValue);
     setSelectedComboKey(null);
+    setHiddenRadarPlayerIds([]);
     pairPagination.resetPage();
     comboPagination.resetPage();
     comboMatchPagination.resetPage();
@@ -162,7 +165,7 @@ export function PlayerComparePage() {
       {query.error ? <ErrorState error={query.error as Error} /> : null}
       {query.data ? (
         <>
-          <div className="two-column">
+          <div className="two-column compare-summary-grid">
             <Card title="Selected players">
               <div className="roster-list">
                 {query.data.players.map((player) => (
@@ -213,35 +216,50 @@ export function PlayerComparePage() {
               </div>
             </Card>
 
-            <Card title="Shared matches">
-              <div className="stack compact">
-                <p>Games together: {query.data.sharedMatches.games}</p>
-                <p>
-                  Shared record: {query.data.sharedMatches.wins}W / {query.data.sharedMatches.losses}L (
-                  {query.data.sharedMatches.winrate}%)
-                </p>
-                <div className="compare-summary-bar">
-                  <div
-                    className="compare-summary-bar-fill"
-                    style={{ width: `${Math.max(0, Math.min(100, query.data.sharedMatches.winrate))}%` }}
-                  />
-                </div>
+            <div className="stack compare-summary-column">
+              <Card title="Shared matches">
                 <div className="stack compact">
-                  <span className="eyebrow">Recent shared matches</span>
-                  {query.data.sharedMatches.recentMatchIds.length > 0 ? (
-                    <div className="action-group">
-                      {query.data.sharedMatches.recentMatchIds.map((matchId) => (
-                        <Link key={matchId} className="inline-link-chip" to={`/matches/${matchId}`}>
-                          Match {matchId}
-                        </Link>
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="muted-inline">No shared matches in local data yet.</span>
-                  )}
+                  <p>Games together: {query.data.sharedMatches.games}</p>
+                  <p>
+                    Shared record: {query.data.sharedMatches.wins}W / {query.data.sharedMatches.losses}L (
+                    {query.data.sharedMatches.winrate}%)
+                  </p>
+                  <div className="compare-summary-bar">
+                    <div
+                      className="compare-summary-bar-fill"
+                      style={{ width: `${Math.max(0, Math.min(100, query.data.sharedMatches.winrate))}%` }}
+                    />
+                  </div>
+                  <div className="stack compact">
+                    <span className="eyebrow">Recent shared matches</span>
+                    {query.data.sharedMatches.recentMatchIds.length > 0 ? (
+                      <div className="action-group">
+                        {query.data.sharedMatches.recentMatchIds.map((matchId) => (
+                          <Link key={matchId} className="inline-link-chip" to={`/matches/${matchId}`}>
+                            Match {matchId}
+                          </Link>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="muted-inline">No shared matches in local data yet.</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+
+              <Card title="Stat radar">
+                <StatsRadarChart
+                  players={query.data.players}
+                  compact
+                  hiddenPlayerIds={hiddenRadarPlayerIds}
+                  onTogglePlayer={(playerId) =>
+                    setHiddenRadarPlayerIds((current) =>
+                      current.includes(playerId) ? current.filter((id) => id !== playerId) : [...current, playerId]
+                    )
+                  }
+                />
+              </Card>
+            </div>
           </div>
 
           <div className="two-column">

@@ -23,6 +23,9 @@ export const playerMatchSummarySchema = z.object({
   win: z.boolean().nullable(),
   laneRole: z.number().nullable(),
   gameMode: z.number().nullable(),
+  gameModeLabel: z.string(),
+  leagueId: z.number().nullable(),
+  leagueName: z.string().nullable(),
   parsedData: matchParsedDataSchema
 });
 
@@ -60,8 +63,29 @@ export const playerOverviewSchema = z.object({
   totalStoredMatches: z.number(),
   totalLocalMatches: z.number(),
   matchScopeLabel: z.string(),
+  availableLeagues: z.array(
+    z.object({
+      leagueId: z.number(),
+      leagueName: z.string()
+    })
+  ),
+  availableHeroes: z.array(playerHeroUsageSchema),
+  activeFilters: z.object({
+    leagueId: z.number().nullable(),
+    queue: z.enum(["all", "ranked", "unranked", "turbo"]),
+    heroId: z.number().nullable()
+  }),
   wins: z.number(),
   losses: z.number(),
+  comparisonStats: z.array(
+    z.object({
+      key: z.string(),
+      label: z.string(),
+      value: z.number(),
+      higherIsBetter: z.boolean()
+    })
+  ),
+  averageObserverWardLifetimePercent: z.number().nullable(),
   heroUsage: z.array(playerHeroUsageSchema),
   peers: z.array(playerPeerSchema),
   matches: z.array(playerMatchSummarySchema)
@@ -86,6 +110,7 @@ export const matchParticipantSchema = z.object({
   lastHits: z.number().nullable(),
   denies: z.number().nullable(),
   level: z.number().nullable(),
+  lobbyType: z.number().nullable().optional(),
   goldTimeline: z.array(z.number()).default([]),
   xpTimeline: z.array(z.number()).default([]),
   lastHitsTimeline: z.array(z.number()).default([]),
@@ -106,7 +131,8 @@ export const matchParticipantSchema = z.object({
       time: z.number(),
       x: z.number().nullable(),
       y: z.number().nullable(),
-      z: z.number().nullable()
+      z: z.number().nullable(),
+      action: z.string().nullable().optional()
     })
   ).default([]),
   sentryLog: z.array(
@@ -114,11 +140,28 @@ export const matchParticipantSchema = z.object({
       time: z.number(),
       x: z.number().nullable(),
       y: z.number().nullable(),
-      z: z.number().nullable()
+      z: z.number().nullable(),
+      action: z.string().nullable().optional()
     })
   ).default([]),
   observerWardsPlaced: z.number().nullable(),
   sentryWardsPlaced: z.number().nullable(),
+  finalInventory: z.array(
+    z.object({
+      name: z.string(),
+      imageUrl: z.string().nullable()
+    }).nullable()
+  ).default([]),
+  finalBackpack: z.array(
+    z.object({
+      name: z.string(),
+      imageUrl: z.string().nullable()
+    }).nullable()
+  ).default([]),
+  finalNeutral: z.object({
+    name: z.string(),
+    imageUrl: z.string().nullable()
+  }).nullable().optional(),
   items: z.array(
     z.object({
       name: z.string(),
@@ -230,12 +273,17 @@ export const heroMatchSummarySchema = z.object({
   startTime: z.number().nullable(),
   durationSeconds: z.number().nullable(),
   radiantWin: z.boolean().nullable(),
+  heroWin: z.boolean().nullable(),
   playerCount: z.number(),
   totalKills: z.number(),
   radiantScore: z.number().nullable(),
   direScore: z.number().nullable(),
   patch: z.string().nullable(),
+  leagueId: z.number().nullable(),
   league: z.string().nullable(),
+  averageRankTier: z.number().nullable(),
+  radiantAverageRankTier: z.number().nullable(),
+  direAverageRankTier: z.number().nullable(),
   parsedData: matchParsedDataSchema
 });
 
@@ -263,12 +311,69 @@ export const heroOverviewSchema = z.object({
   heroIconUrl: z.string().nullable(),
   heroPortraitUrl: z.string().nullable(),
   source: cacheSourceSchema,
+  availableLeagues: z.array(
+    z.object({
+      leagueId: z.number(),
+      leagueName: z.string()
+    })
+  ),
+  activeFilters: z.object({
+    leagueId: z.number().nullable(),
+    minRankTier: z.number().nullable(),
+    maxRankTier: z.number().nullable()
+  }),
   games: z.number(),
   wins: z.number(),
   winrate: z.number(),
   uniquePlayers: z.number(),
   averageFirstCoreItemTimingSeconds: z.number().nullable(),
   commonItems: heroStatSchema.shape.commonItems,
+  commonSkillBuilds: z.array(
+    z.object({
+      sequence: z.array(
+        z.object({
+          level: z.number(),
+          abilityId: z.number(),
+          abilityName: z.string(),
+          imageUrl: z.string().nullable()
+        })
+      ),
+      games: z.number(),
+      winrate: z.number()
+    })
+  ),
+  commonItemBuilds: z.array(
+    z.object({
+      sequence: z.array(
+        z.object({
+          itemName: z.string(),
+          imageUrl: z.string().nullable()
+        })
+      ),
+      games: z.number(),
+      winrate: z.number()
+    })
+  ),
+  buildSamples: z.object({
+    skillMatches: z.number(),
+    itemMatches: z.number()
+  }),
+  mmrBreakdown: z.array(
+    z.object({
+      label: z.string(),
+      minRankTier: z.number().nullable(),
+      games: z.number(),
+      wins: z.number(),
+      winrate: z.number()
+    })
+  ),
+  rankDistribution: z.array(
+    z.object({
+      rankTier: z.number(),
+      label: z.string(),
+      games: z.number()
+    })
+  ),
   recentMatches: z.array(heroMatchSummarySchema),
   playerUsage: z.array(heroPlayerUsageSchema)
 });
@@ -409,6 +514,26 @@ export const dashboardSchema = z.object({
   )
 });
 
+export const communityGraphSchema = z.object({
+  nodes: z.array(
+    z.object({
+      playerId: z.number(),
+      personaname: z.string().nullable(),
+      avatar: z.string().nullable(),
+      favoritesCount: z.number(),
+      favoredByCount: z.number(),
+      degree: z.number()
+    })
+  ),
+  edges: z.array(
+    z.object({
+      sourcePlayerId: z.number(),
+      targetPlayerId: z.number(),
+      bidirectional: z.boolean()
+    })
+  )
+});
+
 export const playerCompareSchema = z.object({
   playerIds: z.array(z.number()),
   players: z.array(
@@ -421,6 +546,14 @@ export const playerCompareSchema = z.object({
       totalStoredMatches: z.number(),
       wins: z.number(),
       losses: z.number(),
+      comparisonStats: z.array(
+        z.object({
+          key: z.string(),
+          label: z.string(),
+          value: z.number(),
+          higherIsBetter: z.boolean()
+        })
+      ),
       topHeroes: z.array(playerHeroUsageSchema).max(5)
     })
   ),
@@ -488,7 +621,13 @@ export const settingsSchema = z.object({
   recentPatchCount: z.number().int().min(0).default(2),
   autoRefreshPlayerIds: z.array(z.number().int().positive()).default([]),
   colorblindMode: z.boolean().default(false),
-  stratzDailyRequestCap: z.number().int().min(1).max(100000).default(10000)
+  stratzPerSecondCap: z.number().int().min(1).max(1000).default(20),
+  stratzPerMinuteCap: z.number().int().min(1).max(10000).default(250),
+  stratzPerHourCap: z.number().int().min(1).max(100000).default(2000),
+  stratzDailyRequestCap: z.number().int().min(1).max(100000).default(10000),
+  appMode: z.enum(["personal", "public"]).default("personal"),
+  adminUnlocked: z.boolean().default(false),
+  adminPasswordConfigured: z.boolean().default(false)
 });
 
 export type PlayerOverview = z.infer<typeof playerOverviewSchema>;
@@ -499,5 +638,6 @@ export type LeagueSummary = z.infer<typeof leagueSummarySchema>;
 export type LeagueOverview = z.infer<typeof leagueOverviewSchema>;
 export type LeagueSyncResponse = z.infer<typeof leagueSyncResponseSchema>;
 export type DashboardResponse = z.infer<typeof dashboardSchema>;
+export type CommunityGraph = z.infer<typeof communityGraphSchema>;
 export type SettingsPayload = z.infer<typeof settingsSchema>;
 export type PlayerCompareResponse = z.infer<typeof playerCompareSchema>;

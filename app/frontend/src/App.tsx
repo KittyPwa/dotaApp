@@ -1,5 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import {
+  getSessionColorblindModeOverride,
+  SESSION_PREFERENCES_EVENT
+} from "./api/client";
 import { DashboardPage } from "./pages/DashboardPage";
 import { HeroDetailPage } from "./pages/HeroDetailPage";
 import { HeroStatsPage } from "./pages/HeroStatsPage";
@@ -14,22 +18,34 @@ import { useSettings } from "./hooks/useQueries";
 
 export function App() {
   const settings = useSettings();
+  const [sessionColorblindOverride, setSessionColorblindOverride] = useState<boolean | null>(() =>
+    getSessionColorblindModeOverride()
+  );
 
   useEffect(() => {
-    const enabled = settings.data?.colorblindMode ?? false;
+    const syncSessionPreferences = () => {
+      setSessionColorblindOverride(getSessionColorblindModeOverride());
+    };
+    window.addEventListener(SESSION_PREFERENCES_EVENT, syncSessionPreferences);
+    return () => {
+      window.removeEventListener(SESSION_PREFERENCES_EVENT, syncSessionPreferences);
+    };
+  }, []);
+
+  useEffect(() => {
+    const enabled = sessionColorblindOverride ?? settings.data?.colorblindMode ?? false;
     document.documentElement.dataset.colorblind = enabled ? "true" : "false";
-  }, [settings.data?.colorblindMode]);
+  }, [sessionColorblindOverride, settings.data?.colorblindMode]);
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div>
-          <p className="eyebrow">Local-first Dota 2</p>
           <h1>Dota Analytics</h1>
         </div>
         <nav className="nav">
           <NavLink to="/">Dashboard</NavLink>
-          <NavLink to="/home">Home</NavLink>
+          <NavLink to="/home">Lookup</NavLink>
           <NavLink to="/compare">Compare</NavLink>
           <NavLink to="/heroes">Heroes</NavLink>
           <NavLink to="/leagues">Leagues</NavLink>

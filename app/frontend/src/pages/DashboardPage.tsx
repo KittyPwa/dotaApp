@@ -22,6 +22,8 @@ function formatRank(rankTier: number | null, leaderboardRank: number | null) {
 
 export function DashboardPage() {
   const query = useDashboard();
+  const [mostPlayedSearch, setMostPlayedSearch] = useState("");
+  const [bestWinrateSearch, setBestWinrateSearch] = useState("");
   const [mostPlayedSort, setMostPlayedSort] = useState<{ key: "hero" | "games"; direction: "asc" | "desc" }>({
     key: "games",
     direction: "desc"
@@ -31,7 +33,10 @@ export function DashboardPage() {
     direction: "desc"
   });
   const sortedMostPlayed = useMemo(() => {
-    const rows = [...(query.data?.mostPlayedHeroes ?? [])];
+    const needle = mostPlayedSearch.trim().toLowerCase();
+    const rows = [...(query.data?.mostPlayedHeroes ?? [])].filter((hero) =>
+      !needle ? true : hero.heroName.toLowerCase().includes(needle)
+    );
     rows.sort((left, right) => {
       const compare =
         mostPlayedSort.key === "hero"
@@ -40,9 +45,12 @@ export function DashboardPage() {
       return mostPlayedSort.direction === "asc" ? compare : -compare;
     });
     return rows;
-  }, [query.data?.mostPlayedHeroes, mostPlayedSort]);
+  }, [mostPlayedSearch, query.data?.mostPlayedHeroes, mostPlayedSort]);
   const sortedBestWinrate = useMemo(() => {
-    const rows = [...(query.data?.highestWinrateHeroes ?? [])];
+    const needle = bestWinrateSearch.trim().toLowerCase();
+    const rows = [...(query.data?.highestWinrateHeroes ?? [])].filter((hero) =>
+      !needle ? true : hero.heroName.toLowerCase().includes(needle)
+    );
     rows.sort((left, right) => {
       let compare = 0;
       switch (bestWinrateSort.key) {
@@ -60,17 +68,14 @@ export function DashboardPage() {
       return bestWinrateSort.direction === "asc" ? compare : -compare;
     });
     return rows;
-  }, [bestWinrateSort, query.data?.highestWinrateHeroes]);
+  }, [bestWinrateSearch, bestWinrateSort, query.data?.highestWinrateHeroes]);
   const mostPlayedPagination = usePagination(sortedMostPlayed.length, 10, [10, 20, 50]);
   const bestWinratePagination = usePagination(sortedBestWinrate.length, 10, [10, 20, 50]);
   const pagedMostPlayed = mostPlayedPagination.paged(sortedMostPlayed);
   const pagedBestWinrate = bestWinratePagination.paged(sortedBestWinrate);
 
   return (
-    <Page
-      title="Dashboard"
-      subtitle="Your local Dota workspace, centered on your player and the people you care about first."
-    >
+    <Page title="Dashboard">
       {query.isLoading ? <LoadingState label="Loading dashboard..." /> : null}
       {query.error ? <ErrorState error={query.error as Error} /> : null}
       {query.data ? (
@@ -86,8 +91,7 @@ export function DashboardPage() {
           <Card title="Priority players">
             {query.data.focusedPlayers.length === 0 ? (
               <p>
-                Set your player ID and favorite player IDs in <Link to="/settings">Settings</Link>. The dashboard will
-                refresh those players first and keep them front and center.
+                Add your player and favorites in <Link to="/settings">Settings</Link>.
               </p>
             ) : (
               <div className="roster-list">
@@ -155,6 +159,22 @@ export function DashboardPage() {
               onPreviousPage={mostPlayedPagination.previousPage}
               onNextPage={mostPlayedPagination.nextPage}
               onPageSizeChange={mostPlayedPagination.setPageSize}
+              extra={
+                <div className="table-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={mostPlayedSearch}
+                      onChange={(event) => {
+                        setMostPlayedSearch(event.target.value);
+                        mostPlayedPagination.resetPage();
+                      }}
+                      placeholder="Hero"
+                    />
+                  </label>
+                </div>
+              }
             >
               <DataTable
                 rows={pagedMostPlayed}
@@ -189,6 +209,22 @@ export function DashboardPage() {
               onPreviousPage={bestWinratePagination.previousPage}
               onNextPage={bestWinratePagination.nextPage}
               onPageSizeChange={bestWinratePagination.setPageSize}
+              extra={
+                <div className="table-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={bestWinrateSearch}
+                      onChange={(event) => {
+                        setBestWinrateSearch(event.target.value);
+                        bestWinratePagination.resetPage();
+                      }}
+                      placeholder="Hero"
+                    />
+                  </label>
+                </div>
+              }
             >
               <DataTable
                 rows={pagedBestWinrate}

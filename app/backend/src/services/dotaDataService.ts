@@ -1,13 +1,15 @@
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type {
+  CommunityGraph,
   HeroOverview,
   LeagueOverview,
   LeagueSummary,
   LeagueSyncResponse,
   MatchOverview,
   PlayerCompareResponse,
-  PlayerOverview
+  PlayerOverview,
+  SettingsPayload
 } from "@dota/shared";
 import { OpenDotaAdapter, type OpenDotaLeagueMatch, type OpenDotaRecentMatch } from "../adapters/openDota.js";
 import { StratzAdapter, type StratzLeagueMatch, type StratzMatchTelemetry, type StratzMatchTelemetryPlayer } from "../adapters/stratz.js";
@@ -36,6 +38,44 @@ type MatchParticipant = MatchOverview["participants"][number];
 type TelemetryProviderStatus = MatchOverview["telemetryStatus"]["openDota"];
 
 type MatchParsedData = PlayerOverview["matches"][number]["parsedData"];
+type HeroSkillBuildEntry = HeroOverview["commonSkillBuilds"][number];
+type SessionSettingsOverrides = {
+  limitToRecentPatches?: boolean | null;
+  recentPatchCount?: number | null;
+};
+type BrowserPreferencesOverrides = {
+  primaryPlayerId?: number | null;
+  favoritePlayerIds?: number[] | null;
+  autoRefreshPlayerIds?: number[] | null;
+};
+
+type AbilityMetadata = {
+  abilityName: string;
+  imageUrl: string | null;
+};
+
+function normalizeAbilityUpgrades(player: {
+  ability_upgrades_arr?: number[];
+  ability_upgrades?: Array<{ ability?: number; time?: number; level?: number }>;
+}) {
+  if (Array.isArray(player.ability_upgrades_arr) && player.ability_upgrades_arr.length > 0) {
+    return player.ability_upgrades_arr
+      .filter((abilityId) => Number.isInteger(abilityId))
+      .map((abilityId, index) => ({ level: index + 1, abilityId, time: null as number | null }));
+  }
+
+  return (player.ability_upgrades ?? [])
+    .filter((entry) => Number.isInteger(entry.ability))
+    .map((entry, index) => ({
+      level: Number.isInteger(entry.level) ? (entry.level as number) : index + 1,
+      abilityId: entry.ability as number,
+      time: typeof entry.time === "number" && Number.isFinite(entry.time) ? entry.time : null
+  }));
+}
+
+function defaultAbilityImagePath(abilityName: string) {
+  return `/apps/dota2/images/dota_react/abilities/${abilityName}.png`;
+}
 
 export class DotaDataService {
   private readonly rawPayloads = new RawPayloadService();
@@ -43,18 +83,281 @@ export class DotaDataService {
   private readonly analyticsService = new AnalyticsService();
 
   private async createOpenDotaAdapter() {
-    const settings = await this.settingsService.getSettings();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
     return new OpenDotaAdapter(settings.openDotaApiKey);
   }
 
   private async createStratzAdapter() {
-    const settings = await this.settingsService.getSettings();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
     return new StratzAdapter(settings.stratzApiKey);
   }
 
   private async createValveAdapter() {
-    const settings = await this.settingsService.getSettings();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
     return new ValveDotaAdapter(settings.steamApiKey);
+  }
+
+  private impactScoreForRow(row: {
+    kills?: number | null;
+    assists?: number | null;
+    deaths?: number | null;
+    gpm?: number | null;
+    xpm?: number | null;
+    heroDamage?: number | null;
+    heroHealing?: number | null;
+    towerDamage?: number | null;
+    obsPlaced?: number | null;
+    senPlaced?: number | null;
+    observerKills?: number | null;
+    campsStacked?: number | null;
+    courierKills?: number | null;
+  }) {
+    return Number(
+      (
+        (row.kills ?? 0) * 3 +
+        (row.assists ?? 0) * 2 -
+        (row.deaths ?? 0) * 1.5 +
+        (row.gpm ?? 0) * 0.04 +
+        (row.xpm ?? 0) * 0.03 +
+        (row.heroDamage ?? 0) * 0.002 +
+        (row.heroHealing ?? 0) * 0.002 +
+        (row.towerDamage ?? 0) * 0.003 +
+        ((row.obsPlaced ?? 0) + (row.senPlaced ?? 0)) * 1.5 +
+        (row.observerKills ?? 0) * 2 +
+        (row.campsStacked ?? 0) * 1.5 +
+        (row.courierKills ?? 0) * 4
+      ).toFixed(2)
+    );
+  }
+
+  private async buildComparisonStatsMap(playerIds: number[], whereCondition: any) {
+    const uniquePlayerIds = [...new Set(playerIds.filter((id) => Number.isInteger(id) && id > 0))];
+    if (uniquePlayerIds.length === 0) {
+      return new Map<number, Array<{ key: string; label: string; value: number; higherIsBetter: boolean }>>();
+    }
+
+    type ComparisonStat = { key: string; label: string; value: number; higherIsBetter: boolean };
+
+    const comparisonMetricRows = await db
+      .select({
+        playerId: matchPlayers.playerId,
+        games: count(matchPlayers.id),
+        wins: sql<number>`sum(case when ${matchPlayers.win} = 1 then 1 else 0 end)`,
+        kills: sql<number>`sum(${matchPlayers.kills})`,
+        deaths: sql<number>`sum(${matchPlayers.deaths})`,
+        assists: sql<number>`sum(${matchPlayers.assists})`,
+        avgGpm: sql<number>`avg(${matchPlayers.gpm})`,
+        avgXpm: sql<number>`avg(${matchPlayers.xpm})`,
+        avgLastHits: sql<number>`avg(${matchPlayers.lastHits})`,
+        avgHeroDamage: sql<number>`avg(${matchPlayers.heroDamage})`,
+        avgHeroHealing: sql<number>`avg(${matchPlayers.heroHealing})`,
+        avgTowerDamage: sql<number>`avg(${matchPlayers.towerDamage})`,
+        avgKills: sql<number>`avg(${matchPlayers.kills})`,
+        avgAssists: sql<number>`avg(${matchPlayers.assists})`,
+        avgObsPlaced: sql<number>`avg(${matchPlayers.obsPlaced})`,
+        avgSenPlaced: sql<number>`avg(${matchPlayers.senPlaced})`,
+        avgObserverKills: sql<number>`avg(${matchPlayers.observerKills})`,
+        avgCampsStacked: sql<number>`avg(${matchPlayers.campsStacked})`,
+        avgCourierKills: sql<number>`avg(${matchPlayers.courierKills})`
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .where(whereCondition)
+      .groupBy(matchPlayers.playerId);
+
+    const selectedPlayerRows = await db
+      .select({
+        matchId: matchPlayers.matchId,
+        playerId: matchPlayers.playerId,
+        isRadiant: matchPlayers.isRadiant,
+        laneRole: matchPlayers.laneRole,
+        win: matchPlayers.win,
+        kills: matchPlayers.kills,
+        deaths: matchPlayers.deaths,
+        assists: matchPlayers.assists,
+        gpm: matchPlayers.gpm,
+        xpm: matchPlayers.xpm,
+        heroDamage: matchPlayers.heroDamage,
+        heroHealing: matchPlayers.heroHealing,
+        towerDamage: matchPlayers.towerDamage,
+        lastHits: matchPlayers.lastHits,
+        obsPlaced: matchPlayers.obsPlaced,
+        senPlaced: matchPlayers.senPlaced,
+        observerKills: matchPlayers.observerKills,
+        campsStacked: matchPlayers.campsStacked,
+        courierKills: matchPlayers.courierKills,
+        goldTJson: matchPlayers.goldTJson,
+        xpTJson: matchPlayers.xpTJson,
+        lhTJson: matchPlayers.lhTJson
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .where(whereCondition);
+
+    const relevantMatchIds = [...new Set(selectedPlayerRows.map((row) => row.matchId).filter((id): id is number => id !== null))];
+    const matchContextRows = relevantMatchIds.length
+      ? await db
+          .select({
+            matchId: matchPlayers.matchId,
+            playerId: matchPlayers.playerId,
+            isRadiant: matchPlayers.isRadiant,
+            laneRole: matchPlayers.laneRole,
+            kills: matchPlayers.kills,
+            deaths: matchPlayers.deaths,
+            assists: matchPlayers.assists,
+            gpm: matchPlayers.gpm,
+            xpm: matchPlayers.xpm,
+            heroDamage: matchPlayers.heroDamage,
+            heroHealing: matchPlayers.heroHealing,
+            towerDamage: matchPlayers.towerDamage,
+            obsPlaced: matchPlayers.obsPlaced,
+            senPlaced: matchPlayers.senPlaced,
+            observerKills: matchPlayers.observerKills,
+            campsStacked: matchPlayers.campsStacked,
+            courierKills: matchPlayers.courierKills,
+            goldTJson: matchPlayers.goldTJson,
+            xpTJson: matchPlayers.xpTJson,
+            lhTJson: matchPlayers.lhTJson
+          })
+          .from(matchPlayers)
+          .where(inArray(matchPlayers.matchId, relevantMatchIds))
+      : [];
+
+    const comparisonMetricMap = new Map(comparisonMetricRows.map((row) => [row.playerId, row]));
+    const matchParticipantsMap = new Map<number, typeof matchContextRows>();
+    for (const row of matchContextRows) {
+      if (row.matchId == null) continue;
+      const current = matchParticipantsMap.get(row.matchId) ?? [];
+      current.push(row);
+      matchParticipantsMap.set(row.matchId, current);
+    }
+
+    const playerRowsMap = new Map<number, Array<(typeof selectedPlayerRows)[number]>>();
+    for (const row of selectedPlayerRows) {
+      if (row.playerId == null) continue;
+      const current = playerRowsMap.get(row.playerId) ?? [];
+      current.push(row);
+      playerRowsMap.set(row.playerId, current);
+    }
+
+    const stat = (key: string, label: string, value: number): ComparisonStat => ({
+      key,
+      label,
+      value: Number((Number.isFinite(value) ? value : 0).toFixed(2)),
+      higherIsBetter: true
+    });
+
+    return new Map(
+      uniquePlayerIds.map((playerId) => {
+        const row = comparisonMetricMap.get(playerId);
+        const playerRows = playerRowsMap.get(playerId) ?? [];
+        const games = Number(row?.games ?? 0);
+        let mvpWins = 0;
+        let laneWins = 0;
+        let laneSamples = 0;
+
+        for (const playerRow of playerRows) {
+          if (playerRow.matchId == null) continue;
+          const participants = matchParticipantsMap.get(playerRow.matchId) ?? [];
+          if (participants.length > 0) {
+            const bestImpact = Math.max(...participants.map((entry) => this.impactScoreForRow(entry)));
+            if (this.impactScoreForRow(playerRow) >= bestImpact - 0.01) {
+              mvpWins += 1;
+            }
+          }
+
+          if (playerRow.laneRole == null || playerRow.isRadiant == null) continue;
+          const goldT = parseJsonValue<number[]>(playerRow.goldTJson, []);
+          const xpT = parseJsonValue<number[]>(playerRow.xpTJson, []);
+          const lhT = parseJsonValue<number[]>(playerRow.lhTJson, []);
+          const playerMinute = Math.min(goldT.length, xpT.length, lhT.length) - 1;
+          if (playerMinute < 8) continue;
+          const playerMinuteIndex = Math.min(9, playerMinute);
+          const playerLaneScore =
+            (goldT[playerMinuteIndex] ?? 0) + (xpT[playerMinuteIndex] ?? 0) + (lhT[playerMinuteIndex] ?? 0) * 35;
+          const opponents = participants.filter(
+            (entry) =>
+              entry.isRadiant !== playerRow.isRadiant &&
+              entry.laneRole != null &&
+              entry.laneRole === playerRow.laneRole
+          );
+          if (opponents.length === 0) continue;
+          const opponentScores = opponents
+            .map((entry) => {
+              const enemyGold = parseJsonValue<number[]>(entry.goldTJson, []);
+              const enemyXp = parseJsonValue<number[]>(entry.xpTJson, []);
+              const enemyLh = parseJsonValue<number[]>(entry.lhTJson, []);
+              const enemyMinute = Math.min(enemyGold.length, enemyXp.length, enemyLh.length) - 1;
+              if (enemyMinute < 8) return null;
+              const enemyMinuteIndex = Math.min(9, enemyMinute);
+              return (enemyGold[enemyMinuteIndex] ?? 0) + (enemyXp[enemyMinuteIndex] ?? 0) + (enemyLh[enemyMinuteIndex] ?? 0) * 35;
+            })
+            .filter((value): value is number => value !== null);
+          if (opponentScores.length === 0) continue;
+          laneSamples += 1;
+          const opponentAverage = opponentScores.reduce((sum, value) => sum + value, 0) / opponentScores.length;
+          if (playerLaneScore > opponentAverage) {
+            laneWins += 1;
+          }
+        }
+
+        const stats: ComparisonStat[] = [
+          stat("impact", "Impact", playerRows.length ? playerRows.reduce((sum, entry) => sum + this.impactScoreForRow(entry), 0) / playerRows.length : 0),
+          stat("mvpRate", "MVP rate %", games ? (mvpWins / games) * 100 : 0),
+          stat("laneWinRate", "Lane winrate %", laneSamples ? (laneWins / laneSamples) * 100 : 0),
+          stat("kills", "Kills", Number(row?.avgKills ?? 0)),
+          stat("assists", "Assists", Number(row?.avgAssists ?? 0)),
+          stat("gpm", "GPM", Number(row?.avgGpm ?? 0)),
+          stat("xpm", "XPM", Number(row?.avgXpm ?? 0)),
+          stat("lastHits", "Last hits", Number(row?.avgLastHits ?? 0)),
+          stat("heroDamage", "Hero damage", Number(row?.avgHeroDamage ?? 0)),
+          stat("heroHealing", "Hero healing", Number(row?.avgHeroHealing ?? 0)),
+          stat("towerDamage", "Tower damage", Number(row?.avgTowerDamage ?? 0)),
+          stat("wardsPlaced", "Wards placed", Number(row?.avgObsPlaced ?? 0) + Number(row?.avgSenPlaced ?? 0)),
+          stat("observerWardsDestroyed", "Observer wards destroyed", Number(row?.avgObserverKills ?? 0)),
+          stat("campStacked", "Camp stacked", Number(row?.avgCampsStacked ?? 0)),
+          stat("courierKills", "Courier kills", Number(row?.avgCourierKills ?? 0))
+        ];
+
+        return [
+          playerId,
+          stats
+        ] as [number, ComparisonStat[]];
+      })
+    );
+  }
+
+  private getQueueLabel(gameMode: number | null | undefined, lobbyType?: number | null | undefined) {
+    if (gameMode === 23) return "Turbo";
+    if (lobbyType === 7) return "Ranked";
+    return "Unranked";
+  }
+
+  private getRankBuckets() {
+    return [
+      { rankTier: 0, label: "Any" },
+      { rankTier: 10, label: "Herald" },
+      { rankTier: 20, label: "Guardian" },
+      { rankTier: 30, label: "Crusader" },
+      { rankTier: 40, label: "Archon" },
+      { rankTier: 50, label: "Legend" },
+      { rankTier: 60, label: "Ancient" },
+      { rankTier: 70, label: "Divine" },
+      { rankTier: 80, label: "Immortal" }
+    ];
+  }
+
+  private buildQueueCondition(
+    gameModeColumn: any,
+    lobbyTypeColumn: any,
+    queue: "all" | "ranked" | "unranked" | "turbo"
+  ) {
+    if (queue === "ranked") return eq(lobbyTypeColumn, 7);
+    if (queue === "turbo") return eq(gameModeColumn, 23);
+    if (queue === "unranked") {
+      return sql`(${gameModeColumn} is null or ${gameModeColumn} != 23) and (${lobbyTypeColumn} is null or ${lobbyTypeColumn} != 7)`;
+    }
+    return undefined;
   }
 
   private async getCachedStratzMatchTelemetry(matchId: number): Promise<StratzMatchTelemetry | null> {
@@ -206,8 +509,8 @@ export class DotaDataService {
           Object.keys(participant.firstPurchaseTimes).length > 0
             ? participant.firstPurchaseTimes
             : derivedFirstPurchaseTimes,
-        observerLog: participant.observerLog.length > 0 ? participant.observerLog : telemetry.observerLog,
-        sentryLog: participant.sentryLog.length > 0 ? participant.sentryLog : telemetry.sentryLog,
+        observerLog: telemetry.observerLog.length > 0 ? telemetry.observerLog : participant.observerLog,
+        sentryLog: telemetry.sentryLog.length > 0 ? telemetry.sentryLog : participant.sentryLog,
         observerWardsPlaced:
           participant.observerWardsPlaced !== null ? participant.observerWardsPlaced : telemetry.observerWardsPlaced,
         sentryWardsPlaced:
@@ -221,7 +524,7 @@ export class DotaDataService {
     participants: MatchParticipant[],
     options?: { forceRefresh?: boolean }
   ): Promise<{ participants: MatchParticipant[]; status: TelemetryProviderStatus }> {
-    const settings = await this.settingsService.getSettings();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
     if (!settings.stratzApiKey) {
       return {
         participants,
@@ -331,6 +634,37 @@ export class DotaDataService {
   async ensureReferenceData() {
     const adapter = await this.createOpenDotaAdapter();
     await new ReferenceDataService(adapter, this.rawPayloads).syncIfStale();
+  }
+
+  private async getAbilityMetadataMap() {
+    const [abilityIdsPayload] = await db
+      .select({ rawJson: rawApiPayloads.rawJson })
+      .from(rawApiPayloads)
+      .where(and(eq(rawApiPayloads.provider, "opendota"), eq(rawApiPayloads.entityType, "ability_ids")))
+      .orderBy(desc(rawApiPayloads.fetchedAt))
+      .limit(1);
+    const [abilitiesPayload] = await db
+      .select({ rawJson: rawApiPayloads.rawJson })
+      .from(rawApiPayloads)
+      .where(and(eq(rawApiPayloads.provider, "opendota"), eq(rawApiPayloads.entityType, "abilities")))
+      .orderBy(desc(rawApiPayloads.fetchedAt))
+      .limit(1);
+
+    const abilityIds = parseJsonValue<Record<string, string>>(abilityIdsPayload?.rawJson, {});
+    const abilities = parseJsonValue<Record<string, { dname?: string; img?: string }>>(abilitiesPayload?.rawJson, {});
+    const metadata = new Map<number, AbilityMetadata>();
+
+    for (const [abilityIdText, abilityInternalName] of Object.entries(abilityIds)) {
+      const abilityId = Number(abilityIdText);
+      if (!Number.isInteger(abilityId) || !abilityInternalName) continue;
+      const ability = abilities[abilityInternalName];
+      metadata.set(abilityId, {
+        abilityName: ability?.dname ?? abilityInternalName.replace(/_/g, " "),
+        imageUrl: buildAssetProxyUrl(ability?.img ?? defaultAbilityImagePath(abilityInternalName))
+      });
+    }
+
+    return metadata;
   }
 
   private async getLatestRawPayloadFetchedAt(entityType: string, entityId: string) {
@@ -452,22 +786,26 @@ export class DotaDataService {
       try {
         const payload = JSON.parse(row.rawJson) as StratzMatchTelemetry;
         const playersWithTelemetry = payload.players ?? [];
+        const fullRosterTelemetry = playersWithTelemetry.length >= 10;
         stratzFlagsByMatchId.set(matchId, {
-          timelines: playersWithTelemetry.some(
-            (player) =>
-              player.goldTimeline.length > 0 ||
-              player.xpTimeline.length > 0 ||
-              player.lastHitsTimeline.length > 0 ||
-              player.deniesTimeline.length > 0 ||
-              player.heroDamageTimeline.length > 0 ||
-              player.damageTakenTimeline.length > 0
-          ),
-          itemTimings: playersWithTelemetry.some((player) => player.purchaseLog.length > 0),
-          vision: playersWithTelemetry.some(
-            (player) =>
-              player.observerLog.length > 0 ||
-              player.sentryLog.length > 0
-          )
+          timelines:
+            fullRosterTelemetry &&
+            playersWithTelemetry.every(
+              (player) =>
+                player.goldTimeline.length > 0 &&
+                player.xpTimeline.length > 0 &&
+                player.lastHitsTimeline.length > 0 &&
+                player.heroDamageTimeline.length > 0 &&
+                player.damageTakenTimeline.length > 0
+            ),
+          itemTimings: fullRosterTelemetry && playersWithTelemetry.every((player) => player.purchaseLog.length > 0),
+          vision:
+            fullRosterTelemetry &&
+            playersWithTelemetry.some(
+              (player) =>
+                player.observerLog.length > 0 ||
+                player.sentryLog.length > 0
+            )
         });
       } catch {
         stratzFlagsByMatchId.set(matchId, { timelines: false, itemTimings: false, vision: false });
@@ -479,9 +817,9 @@ export class DotaDataService {
       const stratzFlags = stratzFlagsByMatchId.get(row.matchId);
       const flags = {
         hasFullMatchPayload: matchIdsWithRawPayload.has(row.matchId),
-        timelines: Number(row.timelines ?? 0) > 0 || Boolean(stratzFlags?.timelines),
-        itemTimings: Number(row.itemTimings ?? 0) > 0 || Boolean(stratzFlags?.itemTimings),
-        vision: Number(row.vision ?? 0) > 0 || Boolean(stratzFlags?.vision)
+        timelines: Boolean(stratzFlags?.timelines),
+        itemTimings: Boolean(stratzFlags?.itemTimings),
+        vision: Boolean(stratzFlags?.vision)
       };
       fallback.set(row.matchId, {
         ...flags,
@@ -507,23 +845,25 @@ export class DotaDataService {
     return fallback;
   }
 
-  private async isPriorityPlayer(playerId: number) {
-    const settings = await this.settingsService.getSettings();
+  private async isPriorityPlayer(playerId: number, browserPreferences?: BrowserPreferencesOverrides) {
+    const settings = await this.settingsService.getSettings({ browserPreferences });
     return settings.primaryPlayerId === playerId || settings.favoritePlayerIds.includes(playerId);
   }
 
-  private async shouldAutoRefreshPlayer(playerId: number) {
-    const settings = await this.settingsService.getSettings();
+  private async shouldAutoRefreshPlayer(playerId: number, browserPreferences?: BrowserPreferencesOverrides) {
+    const settings = await this.settingsService.getSettings({ browserPreferences });
     return settings.autoRefreshPlayerIds.includes(playerId);
   }
 
-  private async getRecentPatchMatchScope() {
+  private async getRecentPatchMatchScope(sessionSettings?: SessionSettingsOverrides) {
     const settings = await this.settingsService.getSettings();
-    if (!settings.limitToRecentPatches) {
+    const limitToRecentPatches = sessionSettings?.limitToRecentPatches ?? settings.limitToRecentPatches;
+    const recentPatchCount = sessionSettings?.recentPatchCount ?? settings.recentPatchCount;
+    if (!limitToRecentPatches) {
       return null;
     }
 
-    const patchWindowSize = Math.max(1, settings.recentPatchCount + 1);
+    const patchWindowSize = Math.max(1, recentPatchCount + 1);
 
     const latestPatchRows = await db
       .select({ patchId: matches.patchId })
@@ -558,17 +898,22 @@ export class DotaDataService {
     return { patchIds, cutoffStartTimeMs };
   }
 
-  private async getMatchScopeLabel(matchScope: { patchIds: number[]; cutoffStartTimeMs: number | null } | null) {
+  private async getMatchScopeLabel(
+    matchScope: { patchIds: number[]; cutoffStartTimeMs: number | null } | null,
+    sessionSettings?: SessionSettingsOverrides
+  ) {
     const settings = await this.settingsService.getSettings();
-    if (!settings.limitToRecentPatches || !matchScope) {
+    const limitToRecentPatches = sessionSettings?.limitToRecentPatches ?? settings.limitToRecentPatches;
+    const recentPatchCount = sessionSettings?.recentPatchCount ?? settings.recentPatchCount;
+    if (!limitToRecentPatches || !matchScope) {
       return "All locally stored matches";
     }
 
-    if (settings.recentPatchCount === 0) {
+    if (recentPatchCount === 0) {
       return "Current patch only";
     }
 
-    return `Current + previous ${settings.recentPatchCount} patch${settings.recentPatchCount === 1 ? "" : "es"}`;
+    return `Current + previous ${recentPatchCount} patch${recentPatchCount === 1 ? "" : "es"}`;
   }
 
   private buildMatchScopeCondition(
@@ -590,14 +935,30 @@ export class DotaDataService {
     return sql`(${sql.join(clauses, sql` or `)})`;
   }
 
-  async getPlayerOverview(playerId: number): Promise<PlayerOverview> {
+  async getPlayerOverview(
+    playerId: number,
+    options?: {
+      leagueId?: number | null;
+      queue?: "all" | "ranked" | "unranked" | "turbo";
+      heroId?: number | null;
+      sessionSettings?: SessionSettingsOverrides;
+      browserPreferences?: BrowserPreferencesOverrides;
+    }
+  ): Promise<PlayerOverview> {
     await this.ensureReferenceData();
     const adapter = await this.createOpenDotaAdapter();
-    const matchScope = await this.getRecentPatchMatchScope();
-    const matchScopeLabel = await this.getMatchScopeLabel(matchScope);
+    const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
+    const matchScopeLabel = await this.getMatchScopeLabel(matchScope, options?.sessionSettings);
     const matchScopeCondition = this.buildMatchScopeCondition(matches, matchScope);
-    const priorityPlayer = await this.isPriorityPlayer(playerId);
-    const autoRefreshOnOpen = await this.shouldAutoRefreshPlayer(playerId);
+    const queue = options?.queue ?? "all";
+    const queueCondition = this.buildQueueCondition(matchPlayers.gameMode, matchPlayers.lobbyType, queue);
+    const leagueCondition = options?.leagueId ? eq(matches.leagueId, options.leagueId) : undefined;
+    const heroCondition = options?.heroId ? eq(matchPlayers.heroId, options.heroId) : undefined;
+    const scopedPlayerCondition = and(eq(matchPlayers.playerId, playerId), matchScopeCondition, queueCondition, leagueCondition, heroCondition);
+    const availableLeagueCondition = and(eq(matchPlayers.playerId, playerId), matchScopeCondition, queueCondition);
+    const availableHeroCondition = and(eq(matchPlayers.playerId, playerId), matchScopeCondition, queueCondition, leagueCondition);
+    const priorityPlayer = await this.isPriorityPlayer(playerId, options?.browserPreferences);
+    const autoRefreshOnOpen = await this.shouldAutoRefreshPlayer(playerId, options?.browserPreferences);
     const [playerRow] = await db.select().from(players).where(eq(players.id, playerId)).limit(1);
     const missingRankInfo = playerRow ? playerRow.rankTier === null && playerRow.leaderboardRank === null : false;
     const [recentMatchesMeta] = await db
@@ -724,12 +1085,30 @@ export class DotaDataService {
       .select({ totalStoredMatches: count(matchPlayers.id) })
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
-      .where(and(eq(matchPlayers.playerId, playerId), matchScopeCondition));
+      .where(scopedPlayerCondition);
 
-    const [{ totalLocalMatches }] = await db
-      .select({ totalLocalMatches: count(matchPlayers.id) })
-      .from(matchPlayers)
-      .where(eq(matchPlayers.playerId, playerId));
+      const [{ totalLocalMatches }] = await db
+        .select({ totalLocalMatches: count(matchPlayers.id) })
+        .from(matchPlayers)
+        .where(eq(matchPlayers.playerId, playerId));
+      const [playerPerformance] = await db
+        .select({
+          games: count(matchPlayers.id),
+          wins: sql<number>`sum(case when ${matchPlayers.win} = 1 then 1 else 0 end)`,
+        avgKills: sql<number>`avg(coalesce(${matchPlayers.kills}, 0))`,
+        avgAssists: sql<number>`avg(coalesce(${matchPlayers.assists}, 0))`,
+        avgGpm: sql<number>`avg(coalesce(${matchPlayers.gpm}, 0))`,
+        avgXpm: sql<number>`avg(coalesce(${matchPlayers.xpm}, 0))`,
+        avgLastHits: sql<number>`avg(coalesce(${matchPlayers.lastHits}, 0))`,
+        avgHeroDamage: sql<number>`avg(coalesce(${matchPlayers.heroDamage}, 0))`,
+        avgHeroHealing: sql<number>`avg(coalesce(${matchPlayers.heroHealing}, 0))`,
+        avgTowerDamage: sql<number>`avg(coalesce(${matchPlayers.towerDamage}, 0))`,
+        avgWardsPlaced: sql<number>`avg(coalesce(${matchPlayers.obsPlaced}, 0) + coalesce(${matchPlayers.senPlaced}, 0))`
+      })
+        .from(matchPlayers)
+        .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+        .where(scopedPlayerCondition);
+      const comparisonStatsMap = await this.buildComparisonStatsMap([playerId], scopedPlayerCondition);
 
     const playerMatches = await db
       .select({
@@ -745,17 +1124,32 @@ export class DotaDataService {
         assists: matchPlayers.assists,
         win: matchPlayers.win,
         laneRole: matchPlayers.laneRole,
-        gameMode: matchPlayers.gameMode
+        gameMode: matchPlayers.gameMode,
+        lobbyType: matchPlayers.lobbyType,
+        leagueId: matches.leagueId,
+        leagueName: leagues.name
       })
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
-      .where(and(eq(matchPlayers.playerId, playerId), matchScopeCondition))
+      .leftJoin(leagues, eq(leagues.id, matches.leagueId))
+      .where(scopedPlayerCondition)
       .orderBy(desc(matches.startTime))
       .limit(priorityPlayer ? 100 : 20);
     const playerMatchParsedData = await this.getMatchParsedDataMap(
       playerMatches.map((match) => match.matchId).filter((matchId): matchId is number => matchId !== null)
     );
+    const availableLeagueRows = await db
+      .select({
+        leagueId: matches.leagueId,
+        leagueName: leagues.name
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(leagues, eq(leagues.id, matches.leagueId))
+      .where(and(availableLeagueCondition, sql`${matches.leagueId} is not null`))
+      .groupBy(matches.leagueId, leagues.name)
+      .orderBy(leagues.name);
 
     const heroUsageRows = await db
       .select({
@@ -769,8 +1163,24 @@ export class DotaDataService {
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
-      .where(and(eq(matchPlayers.playerId, playerId), matchScopeCondition))
+      .where(scopedPlayerCondition)
       .groupBy(matchPlayers.heroId, heroes.localizedName)
+      .orderBy(desc(sql`count(${matchPlayers.id})`));
+
+    const availableHeroRows = await db
+      .select({
+        heroId: matchPlayers.heroId,
+        heroInternalName: heroes.name,
+        heroName: heroes.localizedName,
+        heroIconPath: heroes.iconPath,
+        games: sql<number>`count(${matchPlayers.id})`,
+        wins: sql<number>`sum(case when ${matchPlayers.win} = 1 then 1 else 0 end)`
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
+      .where(and(availableHeroCondition, sql`${matchPlayers.heroId} is not null`))
+      .groupBy(matchPlayers.heroId, heroes.localizedName, heroes.name, heroes.iconPath)
       .orderBy(desc(sql`count(${matchPlayers.id})`));
 
     const playerMatchBase = alias(matchPlayers, "player_match_base");
@@ -797,7 +1207,14 @@ export class DotaDataService {
       )
       .leftJoin(matches, eq(matches.id, playerMatchBase.matchId))
       .leftJoin(peerPlayer, eq(peerPlayer.id, peerMatch.playerId))
-      .where(and(eq(playerMatchBase.playerId, playerId), matchScopeCondition))
+      .where(
+        and(
+          eq(playerMatchBase.playerId, playerId),
+          matchScopeCondition,
+          leagueCondition,
+          this.buildQueueCondition(playerMatchBase.gameMode, playerMatchBase.lobbyType, queue)
+        )
+      )
       .groupBy(peerMatch.playerId, peerPlayer.personaname, peerPlayer.avatar)
       .orderBy(desc(count(peerMatch.id)))
       .limit(12);
@@ -809,9 +1226,58 @@ export class DotaDataService {
       })
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
-      .where(and(eq(matchPlayers.playerId, playerId), matchScopeCondition));
+      .where(scopedPlayerCondition);
+
+    const observerLifetimeRows = await db
+      .select({
+        observerLogJson: matchPlayers.obsLogJson,
+        durationSeconds: matches.durationSeconds
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .where(scopedPlayerCondition);
+
+    const observerLifetimeSamples: number[] = [];
+    for (const row of observerLifetimeRows) {
+      if (!row.durationSeconds || row.durationSeconds <= 0) continue;
+      const entries = parseJsonValue<Array<{ time?: number; x?: number | null; y?: number | null; z?: number | null; action?: string | null }>>(
+        row.observerLogJson,
+        []
+      )
+        .filter((entry) => typeof entry.time === "number")
+        .sort((left, right) => (left.time ?? 0) - (right.time ?? 0));
+      const activeWards = new Map<string, number>();
+      for (const entry of entries) {
+        const key = `${Math.round(entry.x ?? -999)}-${Math.round(entry.y ?? -999)}-${Math.round(entry.z ?? -999)}`;
+        const action = (entry.action ?? "SPAWN").toUpperCase();
+        if (action === "DESPAWN") {
+          const spawnedAt = activeWards.get(key);
+          if (typeof spawnedAt === "number") {
+            observerLifetimeSamples.push(Math.max(0, ((entry.time ?? spawnedAt) - spawnedAt) / row.durationSeconds) * 100);
+            activeWards.delete(key);
+          }
+        } else {
+          activeWards.set(key, entry.time ?? 0);
+        }
+      }
+      for (const spawnedAt of activeWards.values()) {
+        observerLifetimeSamples.push(Math.max(0, (row.durationSeconds - spawnedAt) / row.durationSeconds) * 100);
+      }
+    }
+    const averageObserverWardLifetimePercent =
+      observerLifetimeSamples.length > 0
+        ? Number((observerLifetimeSamples.reduce((sum, value) => sum + value, 0) / observerLifetimeSamples.length).toFixed(1))
+        : null;
 
     const historySyncedAt = await this.getLatestRawPayloadFetchedAt("player_match_history", String(playerId));
+    const filterBits = [matchScopeLabel];
+    if (options?.leagueId) {
+      const selectedLeague = availableLeagueRows.find((row) => row.leagueId === options.leagueId);
+      filterBits.push(selectedLeague?.leagueName ?? `League ${options.leagueId}`);
+    }
+    if (queue !== "all") {
+      filterBits.push(queue === "ranked" ? "Ranked" : queue === "turbo" ? "Turbo" : "Unranked");
+    }
 
     return {
       playerId: freshPlayer.id,
@@ -828,9 +1294,32 @@ export class DotaDataService {
       lastSyncedAt: freshPlayer.lastProfileFetchedAt?.getTime() ?? null,
       totalStoredMatches: totalStoredMatches ?? 0,
       totalLocalMatches: totalLocalMatches ?? 0,
-      matchScopeLabel,
+      matchScopeLabel: filterBits.join(" • "),
+      availableLeagues: availableLeagueRows
+        .filter((row) => row.leagueId !== null && row.leagueId > 0)
+        .map((row) => ({
+          leagueId: row.leagueId ?? 0,
+          leagueName: row.leagueName ?? `League ${row.leagueId}`
+        })),
+      availableHeroes: availableHeroRows
+        .filter((row) => row.heroId !== null && row.games > 0)
+        .map((row) => ({
+          heroId: row.heroId ?? 0,
+          heroName: row.heroName ?? `Hero ${row.heroId}`,
+          heroIconUrl: buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroInternalName)),
+          games: row.games,
+          wins: row.wins ?? 0,
+          winrate: row.games ? Number((((row.wins ?? 0) / row.games) * 100).toFixed(1)) : 0
+        })),
+      activeFilters: {
+        leagueId: options?.leagueId ?? null,
+        queue,
+        heroId: options?.heroId ?? null
+      },
       wins: winLossRow?.wins ?? 0,
       losses: winLossRow?.losses ?? 0,
+        comparisonStats: comparisonStatsMap.get(playerId) ?? [],
+      averageObserverWardLifetimePercent,
       heroUsage: heroUsageRows.map((row) => ({
         heroId: row.heroId ?? 0,
         heroName: row.heroName ?? `Hero ${row.heroId}`,
@@ -862,6 +1351,10 @@ export class DotaDataService {
         win: match.win,
         laneRole: match.laneRole,
         gameMode: match.gameMode,
+        lobbyType: match.lobbyType,
+        gameModeLabel: this.getQueueLabel(match.gameMode, match.lobbyType),
+        leagueId: match.leagueId && match.leagueId > 0 ? match.leagueId : null,
+        leagueName: match.leagueId && match.leagueId > 0 ? match.leagueName : null,
         parsedData: playerMatchParsedData.get(match.matchId ?? 0) ?? {
           label: "Basic",
           hasFullMatchPayload: false,
@@ -894,17 +1387,31 @@ export class DotaDataService {
     return this.getPlayerOverview(playerId);
   }
 
-  async comparePlayers(playerIds: number[]): Promise<PlayerCompareResponse> {
-    await this.ensureReferenceData();
-    const matchScope = await this.getRecentPatchMatchScope();
-    const matchScopeCondition = this.buildMatchScopeCondition(matches, matchScope);
-    const uniquePlayerIds = [...new Set(playerIds.filter((id) => Number.isInteger(id) && id > 0))];
-
-    if (uniquePlayerIds.length < 2) {
-      throw new Error("Choose at least two players to compare.");
-    }
-
-    const playersData = await Promise.all(uniquePlayerIds.map((playerId) => this.getPlayerOverview(playerId)));
+  async comparePlayers(
+    playerIds: number[],
+    options?: { sessionSettings?: SessionSettingsOverrides; browserPreferences?: BrowserPreferencesOverrides }
+  ): Promise<PlayerCompareResponse> {
+      await this.ensureReferenceData();
+      const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
+      const matchScopeCondition = this.buildMatchScopeCondition(matches, matchScope);
+      const uniquePlayerIds = [...new Set(playerIds.filter((id) => Number.isInteger(id) && id > 0))];
+  
+      if (uniquePlayerIds.length < 2) {
+        throw new Error("Choose at least two players to compare.");
+      }
+  
+      const playersData = await Promise.all(
+        uniquePlayerIds.map((playerId) =>
+          this.getPlayerOverview(playerId, {
+            sessionSettings: options?.sessionSettings,
+            browserPreferences: options?.browserPreferences
+          })
+        )
+      );
+      const comparisonStatsMap = await this.buildComparisonStatsMap(
+        uniquePlayerIds,
+        and(inArray(matchPlayers.playerId, uniquePlayerIds), matchScopeCondition)
+      );
 
     const selectedMatchBase = alias(matchPlayers, "selected_match_base");
     const selectedMatchPeer = alias(matchPlayers, "selected_match_peer");
@@ -1144,13 +1651,14 @@ export class DotaDataService {
         playerId: player.playerId,
         personaname: player.personaname,
         avatar: player.avatar,
-        rankTier: player.rankTier,
-        leaderboardRank: player.leaderboardRank,
-        totalStoredMatches: player.totalStoredMatches,
-        wins: player.wins,
-        losses: player.losses,
-        topHeroes: player.heroUsage.slice(0, 5)
-      })),
+          rankTier: player.rankTier,
+          leaderboardRank: player.leaderboardRank,
+          totalStoredMatches: player.totalStoredMatches,
+          wins: player.wins,
+          losses: player.losses,
+          comparisonStats: comparisonStatsMap.get(player.playerId) ?? [],
+          topHeroes: player.heroUsage.slice(0, 5)
+        })),
       sharedMatches: sharedStats,
       sharedMatchDetails,
       pairStats: [...pairMap.values()].map((row) => ({
@@ -1287,6 +1795,7 @@ export class DotaDataService {
         lastHits: matchPlayers.lastHits,
         denies: matchPlayers.denies,
         level: matchPlayers.level,
+        lobbyType: matchPlayers.lobbyType,
         goldTJson: matchPlayers.goldTJson,
         xpTJson: matchPlayers.xpTJson,
         lhTJson: matchPlayers.lhTJson,
@@ -1309,7 +1818,15 @@ export class DotaDataService {
         item4: sql<string | null>`(select localized_name from items where id = ${matchPlayers.item4})`,
         item4Image: sql<string | null>`(select image_path from items where id = ${matchPlayers.item4})`,
         item5: sql<string | null>`(select localized_name from items where id = ${matchPlayers.item5})`,
-        item5Image: sql<string | null>`(select image_path from items where id = ${matchPlayers.item5})`
+        item5Image: sql<string | null>`(select image_path from items where id = ${matchPlayers.item5})`,
+        backpack0: sql<string | null>`(select localized_name from items where id = ${matchPlayers.backpack0})`,
+        backpack0Image: sql<string | null>`(select image_path from items where id = ${matchPlayers.backpack0})`,
+        backpack1: sql<string | null>`(select localized_name from items where id = ${matchPlayers.backpack1})`,
+        backpack1Image: sql<string | null>`(select image_path from items where id = ${matchPlayers.backpack1})`,
+        backpack2: sql<string | null>`(select localized_name from items where id = ${matchPlayers.backpack2})`,
+        backpack2Image: sql<string | null>`(select image_path from items where id = ${matchPlayers.backpack2})`,
+        itemNeutral: sql<string | null>`(select localized_name from items where id = ${matchPlayers.itemNeutral})`,
+        itemNeutralImage: sql<string | null>`(select image_path from items where id = ${matchPlayers.itemNeutral})`
       })
       .from(matchPlayers)
       .leftJoin(players, eq(players.id, matchPlayers.playerId))
@@ -1340,6 +1857,7 @@ export class DotaDataService {
       lastHits: row.lastHits,
       denies: row.denies,
       level: row.level,
+      lobbyType: row.lobbyType,
       goldTimeline: parseJsonValue<number[]>(row.goldTJson, []),
       xpTimeline: parseJsonValue<number[]>(row.xpTJson, []),
       lastHitsTimeline: parseJsonValue<number[]>(row.lhTJson, []),
@@ -1351,14 +1869,47 @@ export class DotaDataService {
       purchaseLog: parseJsonValue<Array<{ time?: number; key?: string; charges?: number }>>(row.purchaseLogJson, [])
         .filter((entry) => typeof entry.time === "number" && typeof entry.key === "string")
         .map((entry) => ({ time: entry.time as number, key: entry.key as string, charges: entry.charges ?? null })),
-      observerLog: parseJsonValue<Array<{ time?: number; x?: number; y?: number; z?: number }>>(row.obsLogJson, [])
+      observerLog: parseJsonValue<Array<{ time?: number; x?: number; y?: number; z?: number; action?: string | null }>>(row.obsLogJson, [])
         .filter((entry) => typeof entry.time === "number")
-        .map((entry) => ({ time: entry.time as number, x: entry.x ?? null, y: entry.y ?? null, z: entry.z ?? null })),
-      sentryLog: parseJsonValue<Array<{ time?: number; x?: number; y?: number; z?: number }>>(row.senLogJson, [])
+        .map((entry) => ({ time: entry.time as number, x: entry.x ?? null, y: entry.y ?? null, z: entry.z ?? null, action: entry.action ?? null })),
+      sentryLog: parseJsonValue<Array<{ time?: number; x?: number; y?: number; z?: number; action?: string | null }>>(row.senLogJson, [])
         .filter((entry) => typeof entry.time === "number")
-        .map((entry) => ({ time: entry.time as number, x: entry.x ?? null, y: entry.y ?? null, z: entry.z ?? null })),
+        .map((entry) => ({ time: entry.time as number, x: entry.x ?? null, y: entry.y ?? null, z: entry.z ?? null, action: entry.action ?? null })),
       observerWardsPlaced: row.obsPlaced,
       sentryWardsPlaced: row.senPlaced,
+      finalInventory: [
+        { name: row.item0, imagePath: row.item0Image },
+        { name: row.item1, imagePath: row.item1Image },
+        { name: row.item2, imagePath: row.item2Image },
+        { name: row.item3, imagePath: row.item3Image },
+        { name: row.item4, imagePath: row.item4Image },
+        { name: row.item5, imagePath: row.item5Image }
+      ].map((item) =>
+        item.name
+          ? {
+              name: item.name,
+              imageUrl: buildAssetProxyUrl(item.imagePath ?? defaultItemImagePath(item.name))
+            }
+          : null
+      ),
+      finalBackpack: [
+        { name: row.backpack0, imagePath: row.backpack0Image },
+        { name: row.backpack1, imagePath: row.backpack1Image },
+        { name: row.backpack2, imagePath: row.backpack2Image }
+      ].map((item) =>
+        item.name
+          ? {
+              name: item.name,
+              imageUrl: buildAssetProxyUrl(item.imagePath ?? defaultItemImagePath(item.name))
+            }
+          : null
+      ),
+      finalNeutral: row.itemNeutral
+        ? {
+            name: row.itemNeutral,
+            imageUrl: buildAssetProxyUrl(row.itemNeutralImage ?? defaultItemImagePath(row.itemNeutral))
+          }
+        : null,
       items: [
         { name: row.item0, imagePath: row.item0Image },
         { name: row.item1, imagePath: row.item1Image },
@@ -1479,23 +2030,114 @@ export class DotaDataService {
     };
   }
 
-  async getHeroStats() {
+  async getHeroStats(options?: { leagueId?: number | null; sessionSettings?: SessionSettingsOverrides }) {
     await this.ensureReferenceData();
-    const matchScope = await this.getRecentPatchMatchScope();
-    return this.analyticsService.getHeroStats(matchScope ?? undefined);
+    const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
+    return this.analyticsService.getHeroStats(matchScope ?? undefined, options);
   }
 
-  async getHeroOverview(heroId: number): Promise<HeroOverview> {
+  async getHeroOverview(
+    heroId: number,
+    options?: {
+      leagueId?: number | null;
+      minRankTier?: number | null;
+      maxRankTier?: number | null;
+      sessionSettings?: SessionSettingsOverrides;
+    }
+  ): Promise<HeroOverview> {
     await this.ensureReferenceData();
-    const matchScope = await this.getRecentPatchMatchScope();
+    const settings = await this.settingsService.getSettings();
+    const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
     const matchScopeCondition = this.buildMatchScopeCondition(matches, matchScope);
-    const heroStats = await this.analyticsService.getHeroStats(matchScope ?? undefined);
-    const heroStat = heroStats.find((entry) => entry.heroId === heroId);
     const [heroRow] = await db.select().from(heroes).where(eq(heroes.id, heroId)).limit(1);
 
-    if (!heroRow || !heroStat) {
+    if (!heroRow) {
       throw new Error("Hero not found in the local dataset.");
     }
+
+    const activeLeagueId = options?.leagueId ?? null;
+    const activeMinRankTier = options?.minRankTier ?? null;
+    const activeMaxRankTier = options?.maxRankTier ?? null;
+
+    const leagueCondition = activeLeagueId ? eq(matches.leagueId, activeLeagueId) : undefined;
+    const rankFilters: ReturnType<typeof sql>[] = [];
+    if (activeMinRankTier !== null) {
+      rankFilters.push(sql`${players.rankTier} >= ${activeMinRankTier}`);
+    }
+    if (activeMaxRankTier !== null) {
+      rankFilters.push(sql`${players.rankTier} <= ${activeMaxRankTier}`);
+    }
+    const rankCondition =
+      rankFilters.length > 0
+        ? sql`${players.rankTier} is not null and (${sql.join(rankFilters, sql` and `)})`
+        : undefined;
+
+    const baseHeroScopeCondition = and(eq(matchPlayers.heroId, heroId), matchScopeCondition);
+    const backgroundHeroScopeCondition = and(baseHeroScopeCondition, leagueCondition);
+    const activeHeroScopeCondition = and(baseHeroScopeCondition, leagueCondition, rankCondition);
+
+    const availableLeagues = await db
+      .select({
+        leagueId: leagues.id,
+        leagueName: leagues.name
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(leagues, eq(leagues.id, matches.leagueId))
+      .where(and(baseHeroScopeCondition, sql`${matches.leagueId} is not null and ${matches.leagueId} > 0`))
+      .groupBy(leagues.id, leagues.name)
+      .orderBy(leagues.name);
+    const savedLeagueNames = new Map(settings.savedLeagues.map((league) => [league.leagueId, league.name]));
+
+    const [summary] = await db
+      .select({
+        games: count(matchPlayers.id),
+        wins: sql<number>`sum(case when ${matchPlayers.win} = 1 then 1 else 0 end)`,
+        uniquePlayers: sql<number>`count(distinct ${matchPlayers.playerId})`,
+        averageFirstCoreItemTimingSeconds: sql<number | null>`
+          avg(
+            case
+              when json_extract(${matchPlayers.firstPurchaseTimeJson}, '$."item_0"') is not null
+              then json_extract(${matchPlayers.firstPurchaseTimeJson}, '$."item_0"')
+              else null
+            end
+          )
+        `
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .where(activeHeroScopeCondition);
+
+    const itemRows = await db
+      .select({
+        itemInternalName: items.name,
+        itemName: items.localizedName,
+        itemImagePath: items.imagePath,
+        timing: sql<number | null>`avg(json_extract(${matchPlayers.firstPurchaseTimeJson}, '$."item_0"'))`,
+        usages: count(matchPlayers.id)
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .leftJoin(items, eq(items.id, matchPlayers.item0))
+      .where(and(activeHeroScopeCondition, sql`${matchPlayers.item0} is not null`))
+      .groupBy(items.name, items.localizedName, items.imagePath)
+      .orderBy(desc(count(matchPlayers.id)));
+
+    const itemCatalogRows = await db
+      .select({
+        itemInternalName: items.name,
+        itemName: items.localizedName,
+        itemImagePath: items.imagePath
+      })
+      .from(items);
+    const itemCatalog = new Map(
+      itemCatalogRows.map((item) => [
+        item.itemInternalName,
+        { itemName: item.itemName, itemImagePath: item.itemImagePath }
+      ])
+    );
 
     const recentMatches = await db
       .select({
@@ -1503,18 +2145,24 @@ export class DotaDataService {
         startTime: matches.startTime,
         durationSeconds: matches.durationSeconds,
         radiantWin: matches.radiantWin,
+        heroWin: sql<number | null>`max(case when ${matchPlayers.win} is null then null when ${matchPlayers.win} = 1 then 1 else 0 end)`,
         radiantScore: matches.radiantScore,
         direScore: matches.direScore,
+        leagueId: matches.leagueId,
         patch: patches.name,
         league: leagues.name,
         playerCount: sql<number>`count(distinct ${matchPlayers.playerSlot})`,
-        totalKills: sql<number>`sum(coalesce(${matchPlayers.kills}, 0))`
+        totalKills: sql<number>`sum(coalesce(${matchPlayers.kills}, 0))`,
+        averageRankTier: sql<number | null>`avg(${players.rankTier})`,
+        radiantAverageRankTier: sql<number | null>`avg(case when ${matchPlayers.isRadiant} = 1 then ${players.rankTier} else null end)`,
+        direAverageRankTier: sql<number | null>`avg(case when ${matchPlayers.isRadiant} = 0 then ${players.rankTier} else null end)`
       })
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
       .leftJoin(patches, eq(patches.id, matches.patchId))
       .leftJoin(leagues, eq(leagues.id, matches.leagueId))
-      .where(and(eq(matchPlayers.heroId, heroId), matchScopeCondition))
+      .where(activeHeroScopeCondition)
       .groupBy(
         matches.id,
         matches.startTime,
@@ -1522,11 +2170,12 @@ export class DotaDataService {
         matches.radiantWin,
         matches.radiantScore,
         matches.direScore,
+        matches.leagueId,
         patches.name,
         leagues.name
       )
-      .orderBy(desc(matches.startTime))
-      .limit(20);
+      .orderBy(desc(matches.startTime));
+
     const recentMatchParsedData = await this.getMatchParsedDataMap(
       recentMatches.map((match) => match.matchId).filter((matchId): matchId is number => matchId !== null)
     );
@@ -1541,10 +2190,206 @@ export class DotaDataService {
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(players, eq(players.id, matchPlayers.playerId))
-      .where(and(eq(matchPlayers.heroId, heroId), matchScopeCondition))
+      .where(activeHeroScopeCondition)
       .groupBy(matchPlayers.playerId, players.personaname)
       .orderBy(desc(sql`count(${matchPlayers.id})`))
-      .limit(12);
+      .limit(20);
+
+    const skillRows = await db
+      .select({
+        abilityUpgradesJson: matchPlayers.abilityUpgradesJson,
+        win: matchPlayers.win
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .where(and(activeHeroScopeCondition, sql`${matchPlayers.abilityUpgradesJson} is not null`));
+
+    const skillBuildMap = new Map<string, { sequence: Array<{ level: number; abilityId: number }>; games: number; wins: number }>();
+    for (const row of skillRows) {
+      const sequence = parseJsonValue<Array<{ level?: number; abilityId?: number }>>(row.abilityUpgradesJson, [])
+        .filter((entry) => Number.isInteger(entry.abilityId))
+        .sort((left, right) => (left.level ?? Number.MAX_SAFE_INTEGER) - (right.level ?? Number.MAX_SAFE_INTEGER))
+        .slice(0, 18)
+        .map((entry, index) => ({
+          level: index + 1,
+          abilityId: entry.abilityId as number
+        }));
+      if (sequence.length === 0) continue;
+      const key = sequence.map((entry) => `${entry.level}:${entry.abilityId}`).join("-");
+      const current = skillBuildMap.get(key) ?? { sequence, games: 0, wins: 0 };
+      current.games += 1;
+      if (row.win === true) current.wins += 1;
+      skillBuildMap.set(key, current);
+    }
+    const abilityMetadataMap = await this.getAbilityMetadataMap();
+
+    const itemBuildRows = await db
+      .select({
+        purchaseLogJson: matchPlayers.purchaseLogJson,
+        win: matchPlayers.win
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .where(
+        and(
+          activeHeroScopeCondition,
+          sql`${matchPlayers.purchaseLogJson} is not null`,
+          sql`json_valid(${matchPlayers.purchaseLogJson})`,
+          sql`json_array_length(${matchPlayers.purchaseLogJson}) > 0`
+        )
+      );
+
+    const itemBuildMap = new Map<
+      string,
+      { sequence: Array<{ itemName: string; itemInternalName: string | null; itemImagePath: string | null }>; games: number; wins: number }
+    >();
+    const excludedBuildItems = new Set([
+      "tango",
+      "enchanted_mango",
+      "clarity",
+      "faerie_fire",
+      "branches",
+      "ward_observer",
+      "ward_sentry",
+      "dust",
+      "smoke_of_deceit",
+      "ward_dispenser",
+      "blood_grenade",
+      "tpscroll",
+      "circlet",
+      "slippers",
+      "mantle",
+      "gauntlets",
+      "band_of_elvenskin",
+      "belt_of_strength",
+      "robe",
+      "crown",
+      "gloves",
+      "boots",
+      "ring_of_protection",
+      "ring_of_regen",
+      "fluffy_hat",
+      "infused_raindrop",
+      "wind_lace",
+      "magic_stick",
+      "magic_wand",
+      "bottle",
+      "flask",
+      "blades_of_attack",
+      "broadsword",
+      "quarterstaff",
+      "mithril_hammer",
+      "javelin",
+      "ogre_axe",
+      "blade_of_alacrity",
+      "staff_of_wizardry",
+      "point_booster",
+      "energy_booster",
+      "vitality_booster",
+      "void_stone",
+      "voodoo_mask",
+      "morbid_mask",
+      "pers",
+      "cornucopia",
+      "sobi_mask",
+      "robe_of_the_magi",
+      "wizard_hat",
+      "trusty_shovel",
+      "arcane_ring",
+      "faded_broach",
+      "pupil_gift",
+      "specialists_array",
+      "whisper_of_the_dread",
+      "philosophers_stone",
+      "bullwhip",
+      "ceremonial_robe",
+      "timeless_relic",
+      "null_talisman",
+      "great_famango",
+      "shadow_amulet",
+      "cloak"
+    ]);
+    let itemBuildSampleMatches = 0;
+    for (const row of itemBuildRows) {
+      const purchaseSequence = parseJsonValue<Array<{ key?: string; time?: number }>>(row.purchaseLogJson, [])
+        .filter((entry) => typeof entry.key === "string" && typeof entry.time === "number" && entry.time >= 0)
+        .sort((left, right) => (left.time ?? 0) - (right.time ?? 0))
+        .map((entry) => (entry.key as string).replace(/^item_/i, ""))
+        .filter((itemName) => {
+          const normalized = itemName.trim().toLowerCase();
+          return !normalized.startsWith("recipe_") && !excludedBuildItems.has(normalized);
+        });
+      const dedupedSequence = purchaseSequence.filter((itemName, index) => purchaseSequence.indexOf(itemName) === index).slice(0, 8);
+      if (dedupedSequence.length === 0) continue;
+      itemBuildSampleMatches += 1;
+
+      const decoratedSequence = dedupedSequence.map((itemName) => {
+        const normalizedItemName = itemName.replace(/^item_/i, "");
+        const itemMetadata = itemCatalog.get(normalizedItemName);
+        return {
+          itemName: itemMetadata?.itemName ?? normalizedItemName.replace(/_/g, " "),
+          itemInternalName: normalizedItemName,
+          itemImagePath: itemMetadata?.itemImagePath ?? null
+        };
+      });
+
+      const key = decoratedSequence.map((item) => item.itemInternalName ?? item.itemName).join(" -> ");
+      const current = itemBuildMap.get(key) ?? { sequence: decoratedSequence, games: 0, wins: 0 };
+      current.games += 1;
+      if (row.win === true) current.wins += 1;
+      itemBuildMap.set(key, current);
+    }
+
+    const mmrBuckets = [
+      { label: "All ranks", minRankTier: null },
+      { label: "Archon+", minRankTier: 40 },
+      { label: "Legend+", minRankTier: 50 },
+      { label: "Ancient+", minRankTier: 60 },
+      { label: "Divine+", minRankTier: 70 },
+      { label: "Immortal", minRankTier: 80 }
+    ];
+    const rankedRows = await db
+      .select({
+        rankTier: players.rankTier,
+        win: matchPlayers.win
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .where(activeHeroScopeCondition);
+
+    const backgroundRankRows = await db
+      .select({
+        rankTier: players.rankTier
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .where(backgroundHeroScopeCondition);
+
+    const mmrBreakdown = mmrBuckets.map((bucket) => {
+      const bucketRows = rankedRows.filter(
+        (row) => bucket.minRankTier === null || (row.rankTier !== null && row.rankTier >= bucket.minRankTier)
+      );
+      const wins = bucketRows.filter((row) => row.win === true).length;
+      return {
+        label: bucket.label,
+        minRankTier: bucket.minRankTier,
+        games: bucketRows.length,
+        wins,
+        winrate: bucketRows.length ? Number(((wins / bucketRows.length) * 100).toFixed(1)) : 0
+      };
+    });
+    const rankDistribution = this.getRankBuckets().map((bucket) => ({
+      rankTier: bucket.rankTier,
+      label: bucket.label,
+      games: backgroundRankRows.filter((row) => row.rankTier !== null && row.rankTier >= bucket.rankTier && row.rankTier < bucket.rankTier + 10).length
+    }));
+
+    const games = summary?.games ?? 0;
+    const wins = summary?.wins ?? 0;
 
     return {
       heroId,
@@ -1552,23 +2397,77 @@ export class DotaDataService {
       heroIconUrl: buildAssetProxyUrl(heroRow.iconPath ?? defaultHeroIconPath(heroRow.name)),
       heroPortraitUrl: buildAssetProxyUrl(heroRow.portraitPath ?? defaultHeroPortraitPath(heroRow.name)),
       source: "cache",
-      games: heroStat.games,
-      wins: heroStat.wins,
-      winrate: heroStat.winrate,
-      uniquePlayers: heroStat.uniquePlayers,
-      averageFirstCoreItemTimingSeconds: heroStat.averageFirstCoreItemTimingSeconds,
-      commonItems: heroStat.commonItems,
+      availableLeagues: availableLeagues
+        .filter((league) => league.leagueId !== null)
+        .map((league) => ({
+          leagueId: league.leagueId ?? 0,
+          leagueName: savedLeagueNames.get(league.leagueId ?? 0) ?? league.leagueName ?? `League ${league.leagueId}`
+        })),
+      activeFilters: {
+        leagueId: activeLeagueId,
+        minRankTier: activeMinRankTier,
+        maxRankTier: activeMaxRankTier
+      },
+      games,
+      wins,
+      winrate: games ? Number(((wins / games) * 100).toFixed(1)) : 0,
+      uniquePlayers: summary?.uniquePlayers ?? 0,
+      averageFirstCoreItemTimingSeconds: summary?.averageFirstCoreItemTimingSeconds ?? null,
+      commonItems: itemRows
+        .filter((item) => item.itemName)
+        .slice(0, 12)
+        .map((item) => ({
+          itemName: item.itemName ?? "Unknown item",
+          imageUrl: buildAssetProxyUrl(item.itemImagePath ?? defaultItemImagePath(item.itemInternalName)),
+          averageTimingSeconds: item.timing ?? null,
+          usages: item.usages
+        })),
+      commonSkillBuilds: [...skillBuildMap.values()]
+        .sort((left, right) => right.games - left.games || right.wins / right.games - left.wins / left.games)
+        .slice(0, 12)
+        .map((build) => ({
+          sequence: build.sequence.map((entry) => ({
+            level: entry.level,
+            abilityId: entry.abilityId,
+            abilityName: abilityMetadataMap.get(entry.abilityId)?.abilityName ?? `Ability ${entry.abilityId}`,
+            imageUrl: abilityMetadataMap.get(entry.abilityId)?.imageUrl ?? null
+          })),
+          games: build.games,
+          winrate: build.games ? Number(((build.wins / build.games) * 100).toFixed(1)) : 0
+        })),
+      commonItemBuilds: [...itemBuildMap.values()]
+        .sort((left, right) => right.games - left.games || right.wins / right.games - left.wins / left.games)
+        .slice(0, 200)
+        .map((build) => ({
+          sequence: build.sequence.map((item) => ({
+            itemName: item.itemName,
+            imageUrl: buildAssetProxyUrl(item.itemImagePath ?? defaultItemImagePath(item.itemInternalName ?? item.itemName))
+          })),
+          games: build.games,
+          winrate: build.games ? Number(((build.wins / build.games) * 100).toFixed(1)) : 0
+        })),
+      buildSamples: {
+        skillMatches: [...skillBuildMap.values()].reduce((sum, build) => sum + build.games, 0),
+        itemMatches: itemBuildSampleMatches
+      },
+      mmrBreakdown,
+      rankDistribution,
       recentMatches: recentMatches.map((match) => ({
         matchId: match.matchId ?? 0,
         startTime: match.startTime?.getTime() ?? null,
         durationSeconds: match.durationSeconds,
         radiantWin: match.radiantWin,
+        heroWin: match.heroWin === null ? null : Boolean(match.heroWin),
         playerCount: match.playerCount,
         totalKills: match.totalKills ?? 0,
         radiantScore: match.radiantScore,
         direScore: match.direScore,
+        leagueId: match.leagueId,
         patch: match.patch ?? null,
-        league: match.league ?? null,
+        league: match.leagueId ? savedLeagueNames.get(match.leagueId) ?? match.league ?? `League ${match.leagueId}` : null,
+        averageRankTier: match.averageRankTier === null ? null : Number(match.averageRankTier.toFixed(1)),
+        radiantAverageRankTier: match.radiantAverageRankTier === null ? null : Number(match.radiantAverageRankTier.toFixed(1)),
+        direAverageRankTier: match.direAverageRankTier === null ? null : Number(match.direAverageRankTier.toFixed(1)),
         parsedData: recentMatchParsedData.get(match.matchId ?? 0) ?? {
           label: "Basic",
           hasFullMatchPayload: false,
@@ -1933,12 +2832,17 @@ export class DotaDataService {
         startTime: match.startTime?.getTime() ?? null,
         durationSeconds: match.durationSeconds,
         radiantWin: match.radiantWin,
+        heroWin: null,
         playerCount: match.playerCount,
         totalKills: match.totalKills ?? 0,
         radiantScore: match.radiantScore,
         direScore: match.direScore,
         patch: match.patch ?? null,
+        leagueId,
         league: leagueName,
+        averageRankTier: null,
+        radiantAverageRankTier: null,
+        direAverageRankTier: null,
         parsedData: parsedData.get(match.matchId) ?? {
           label: "Basic",
           hasFullMatchPayload: false,
@@ -2151,7 +3055,7 @@ export class DotaDataService {
       });
       return result;
     } catch (openDotaError) {
-      const settings = await this.settingsService.getSettings();
+      const settings = await this.settingsService.getSettings({ includeProtected: true });
       if (!settings.steamApiKey) {
         throw openDotaError;
       }
@@ -2172,10 +3076,17 @@ export class DotaDataService {
     }
   }
 
-  async getDashboard() {
+  async getDashboard(options?: {
+    adminUnlocked?: boolean;
+    sessionSettings?: SessionSettingsOverrides;
+    browserPreferences?: BrowserPreferencesOverrides;
+  }) {
     await this.ensureReferenceData();
-    const settings = await this.settingsService.getSettings();
-    const matchScope = await this.getRecentPatchMatchScope();
+    const settings = await this.settingsService.getSettings({
+      adminUnlocked: options?.adminUnlocked,
+      browserPreferences: options?.browserPreferences
+    });
+    const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
     const baseDashboard = await this.analyticsService.getDashboard(matchScope ?? undefined);
 
     const focusedPlayerIds = [
@@ -2185,7 +3096,10 @@ export class DotaDataService {
 
     const focusedPlayers = [];
     for (const playerId of focusedPlayerIds) {
-      const overview = await this.getPlayerOverview(playerId);
+      const overview = await this.getPlayerOverview(playerId, {
+        sessionSettings: options?.sessionSettings,
+        browserPreferences: options?.browserPreferences
+      });
       focusedPlayers.push({
         playerId: overview.playerId,
         personaname: overview.personaname,
@@ -2210,25 +3124,83 @@ export class DotaDataService {
     };
   }
 
-  async getSettings() {
-    return this.settingsService.getSettings();
+  async setFavoritePlayersForOwner(ownerPlayerId: number, favoritePlayerIds: number[]) {
+    const normalizedOwnerPlayerId = Number(ownerPlayerId);
+    if (!Number.isInteger(normalizedOwnerPlayerId) || normalizedOwnerPlayerId <= 0) {
+      throw new Error("A valid current player is required before saving favorites.");
+    }
+    return this.settingsService.setFavoritePlayersForOwner(normalizedOwnerPlayerId, favoritePlayerIds);
   }
 
-  async updateSettings(input: {
-    openDotaApiKey: string | null;
-    stratzApiKey: string | null;
-    steamApiKey: string | null;
-    primaryPlayerId: number | null;
-    favoritePlayerIds: number[];
-    savedLeagues: Array<{ leagueId: number; slug: string; name: string }>;
-    limitToRecentPatches: boolean;
-    recentPatchCount: number;
-    autoRefreshPlayerIds: number[];
-    colorblindMode: boolean;
-    stratzDailyRequestCap: number;
-  }) {
-    return this.settingsService.updateSettings(input);
+  async getCommunityGraph(): Promise<CommunityGraph> {
+    const linksByOwner = await this.settingsService.getFavoriteLinksByOwner();
+    const edges = Object.entries(linksByOwner).flatMap(([ownerId, favorites]) =>
+      favorites.map((favoritePlayerId) => ({
+        sourcePlayerId: Number(ownerId),
+        targetPlayerId: favoritePlayerId
+      }))
+    );
+    const playerIds = [...new Set(edges.flatMap((edge) => [edge.sourcePlayerId, edge.targetPlayerId]))];
+    const playerRows =
+      playerIds.length > 0
+        ? await db
+            .select({ id: players.id, personaname: players.personaname, avatar: players.avatar })
+            .from(players)
+            .where(inArray(players.id, playerIds))
+        : [];
+    const playersById = new Map(playerRows.map((row) => [row.id, row]));
+    const outgoingCounts = new Map<number, number>();
+    const incomingCounts = new Map<number, number>();
+    for (const edge of edges) {
+      outgoingCounts.set(edge.sourcePlayerId, (outgoingCounts.get(edge.sourcePlayerId) ?? 0) + 1);
+      incomingCounts.set(edge.targetPlayerId, (incomingCounts.get(edge.targetPlayerId) ?? 0) + 1);
+    }
+
+    const bidirectionalPairs = new Set(
+      edges
+        .filter((edge) =>
+          edges.some(
+            (candidate) =>
+              candidate.sourcePlayerId === edge.targetPlayerId && candidate.targetPlayerId === edge.sourcePlayerId
+          )
+        )
+        .map((edge) => [edge.sourcePlayerId, edge.targetPlayerId].sort((left, right) => left - right).join(":"))
+    );
+
+    return {
+      nodes: playerIds.map((playerId) => {
+        const player = playersById.get(playerId);
+        const favoritesCount = outgoingCounts.get(playerId) ?? 0;
+        const favoredByCount = incomingCounts.get(playerId) ?? 0;
+        return {
+          playerId,
+          personaname: player?.personaname ?? null,
+          avatar: player?.avatar ?? null,
+          favoritesCount,
+          favoredByCount,
+          degree: favoritesCount + favoredByCount
+        };
+      }),
+      edges: edges.map((edge) => ({
+        ...edge,
+        bidirectional: bidirectionalPairs.has(
+          [edge.sourcePlayerId, edge.targetPlayerId].sort((left, right) => left - right).join(":")
+        )
+      }))
+    };
   }
+
+  async getSettings(options?: { adminUnlocked?: boolean; browserPreferences?: BrowserPreferencesOverrides }) {
+    return this.settingsService.getSettings(options);
+  }
+
+  async setAdminPassword(password: string) {
+    return this.settingsService.setAdminPassword(password);
+  }
+
+    async updateSettings(input: SettingsPayload) {
+      return this.settingsService.updateSettings(input);
+    }
 
   async testStratz(playerId: number) {
     const adapter = await this.createStratzAdapter();
@@ -2238,6 +3210,14 @@ export class DotaDataService {
   async testSteamLeague(leagueId: number) {
     const adapter = await this.createValveAdapter();
     return adapter.getLeagueMatches(leagueId, 5);
+  }
+
+  async verifyAdminPassword(password: string | null | undefined) {
+    return this.settingsService.verifyAdminPassword(password);
+  }
+
+  getAppMode() {
+    return config.appMode;
   }
 
   private async upsertRecentMatch(database: typeof db, playerId: number, match: OpenDotaRecentMatch, fetchedAt: number) {
@@ -2281,6 +3261,7 @@ export class DotaDataService {
         assists: match.assists,
         laneRole: match.lane_role,
         gameMode: match.game_mode,
+        lobbyType: match.lobby_type ?? null,
         updatedAt: new Date()
       })
       .onConflictDoUpdate({
@@ -2295,6 +3276,7 @@ export class DotaDataService {
           assists: match.assists,
           laneRole: match.lane_role,
           gameMode: match.game_mode,
+          lobbyType: match.lobby_type ?? null,
           updatedAt: new Date()
         }
       });
@@ -2305,6 +3287,22 @@ export class DotaDataService {
     payload: Awaited<ReturnType<OpenDotaAdapter["getMatch"]>>["payload"],
     fetchedAt: number
   ) {
+    const referencedHeroIds = [
+      ...(payload.picks_bans ?? []).map((draftEvent) => draftEvent.hero_id),
+      ...(payload.players ?? []).map((player) => player.hero_id ?? null)
+    ].filter((heroId): heroId is number => typeof heroId === "number" && Number.isInteger(heroId) && heroId > 0);
+    const validHeroIds =
+      referencedHeroIds.length > 0
+        ? new Set(
+            (
+              await database
+                .select({ id: heroes.id })
+                .from(heroes)
+                .where(inArray(heroes.id, [...new Set(referencedHeroIds)]))
+            ).map((row) => row.id)
+          )
+        : new Set<number>();
+
     await database
       .insert(matches)
       .values({
@@ -2351,6 +3349,9 @@ export class DotaDataService {
     await database.delete(drafts).where(eq(drafts.matchId, payload.match_id));
 
     for (const draftEvent of payload.picks_bans ?? []) {
+      if (!validHeroIds.has(draftEvent.hero_id)) {
+        continue;
+      }
       await database.insert(drafts).values({
         matchId: payload.match_id,
         heroId: draftEvent.hero_id,
@@ -2378,13 +3379,17 @@ export class DotaDataService {
       const playerSlot = player.player_slot ?? 0;
       const isRadiant = playerSlot < 128;
       const win = payload.radiant_win === undefined ? null : payload.radiant_win === isRadiant;
+      const heroId =
+        typeof player.hero_id === "number" && Number.isInteger(player.hero_id) && validHeroIds.has(player.hero_id)
+          ? player.hero_id
+          : null;
 
       await database
         .insert(matchPlayers)
         .values({
           matchId: payload.match_id,
           playerId: player.account_id ?? null,
-          heroId: player.hero_id ?? null,
+          heroId,
           playerSlot,
           isRadiant,
           win,
@@ -2395,16 +3400,19 @@ export class DotaDataService {
           gpm: player.gold_per_min ?? null,
           xpm: player.xp_per_min ?? null,
           heroDamage: player.hero_damage ?? null,
+          heroHealing: player.hero_healing ?? null,
           towerDamage: player.tower_damage ?? null,
           lastHits: player.last_hits ?? null,
           denies: player.denies ?? null,
           level: player.level ?? null,
+          lobbyType: payload.lobby_type ?? null,
           item0: player.item_0 ?? null,
           item1: player.item_1 ?? null,
           item2: player.item_2 ?? null,
           item3: player.item_3 ?? null,
           item4: player.item_4 ?? null,
           item5: player.item_5 ?? null,
+          itemNeutral: player.item_neutral ?? null,
           backpack0: player.backpack_0 ?? null,
           backpack1: player.backpack_1 ?? null,
           backpack2: player.backpack_2 ?? null,
@@ -2413,19 +3421,23 @@ export class DotaDataService {
           lhTJson: JSON.stringify(player.lh_t ?? []),
           dnTJson: JSON.stringify(player.dn_t ?? []),
           firstPurchaseTimeJson: JSON.stringify(player.first_purchase_time ?? {}),
+          abilityUpgradesJson: JSON.stringify(normalizeAbilityUpgrades(player)),
           itemUsesJson: JSON.stringify(player.item_uses ?? {}),
           purchaseLogJson: JSON.stringify(player.purchase_log ?? []),
           obsLogJson: JSON.stringify(player.obs_log ?? []),
           senLogJson: JSON.stringify(player.sen_log ?? []),
           obsPlaced: player.obs_placed ?? null,
           senPlaced: player.sen_placed ?? null,
+          observerKills: player.observer_kills ?? null,
+          campsStacked: player.camps_stacked ?? null,
+          courierKills: player.courier_kills ?? null,
           updatedAt: new Date()
         })
         .onConflictDoUpdate({
           target: [matchPlayers.matchId, matchPlayers.playerSlot],
           set: {
             playerId: player.account_id ?? null,
-            heroId: player.hero_id ?? null,
+            heroId,
             isRadiant,
             win,
             kills: player.kills ?? null,
@@ -2435,16 +3447,19 @@ export class DotaDataService {
             gpm: player.gold_per_min ?? null,
             xpm: player.xp_per_min ?? null,
             heroDamage: player.hero_damage ?? null,
+            heroHealing: player.hero_healing ?? null,
             towerDamage: player.tower_damage ?? null,
             lastHits: player.last_hits ?? null,
             denies: player.denies ?? null,
             level: player.level ?? null,
+            lobbyType: payload.lobby_type ?? null,
             item0: player.item_0 ?? null,
             item1: player.item_1 ?? null,
             item2: player.item_2 ?? null,
             item3: player.item_3 ?? null,
             item4: player.item_4 ?? null,
             item5: player.item_5 ?? null,
+            itemNeutral: player.item_neutral ?? null,
             backpack0: player.backpack_0 ?? null,
             backpack1: player.backpack_1 ?? null,
             backpack2: player.backpack_2 ?? null,
@@ -2453,12 +3468,16 @@ export class DotaDataService {
             lhTJson: JSON.stringify(player.lh_t ?? []),
             dnTJson: JSON.stringify(player.dn_t ?? []),
             firstPurchaseTimeJson: JSON.stringify(player.first_purchase_time ?? {}),
+            abilityUpgradesJson: JSON.stringify(normalizeAbilityUpgrades(player)),
             itemUsesJson: JSON.stringify(player.item_uses ?? {}),
             purchaseLogJson: JSON.stringify(player.purchase_log ?? []),
             obsLogJson: JSON.stringify(player.obs_log ?? []),
             senLogJson: JSON.stringify(player.sen_log ?? []),
             obsPlaced: player.obs_placed ?? null,
             senPlaced: player.sen_placed ?? null,
+            observerKills: player.observer_kills ?? null,
+            campsStacked: player.camps_stacked ?? null,
+            courierKills: player.courier_kills ?? null,
             updatedAt: new Date()
           }
         });

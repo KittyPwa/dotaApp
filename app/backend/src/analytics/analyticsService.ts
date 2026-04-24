@@ -5,8 +5,12 @@ import { drafts, heroes, items, matchPlayers, matches, players } from "../db/sch
 import { buildAssetProxyUrl, defaultHeroIconPath, defaultItemImagePath } from "../utils/assets.js";
 
 export class AnalyticsService {
-  async getHeroStats(matchScope?: { patchIds: number[]; cutoffStartTimeMs: number | null }): Promise<HeroStat[]> {
+  async getHeroStats(
+    matchScope?: { patchIds: number[]; cutoffStartTimeMs: number | null },
+    options?: { leagueId?: number | null }
+  ): Promise<HeroStat[]> {
     const scopedWhere = this.buildMatchScopeWhere(matchScope);
+    const leagueWhere = options?.leagueId ? eq(matches.leagueId, options.leagueId) : undefined;
     const rows = await db
       .select({
         heroId: matchPlayers.heroId,
@@ -29,7 +33,7 @@ export class AnalyticsService {
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
-      .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere))
+      .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere, leagueWhere))
       .groupBy(matchPlayers.heroId, heroes.name, heroes.localizedName, heroes.iconPath)
       .orderBy(desc(count(matchPlayers.id)));
 
@@ -45,7 +49,7 @@ export class AnalyticsService {
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(items, eq(items.id, matchPlayers.item0))
-      .where(and(sql`${matchPlayers.heroId} is not null and ${matchPlayers.item0} is not null`, scopedWhere))
+      .where(and(sql`${matchPlayers.heroId} is not null and ${matchPlayers.item0} is not null`, scopedWhere, leagueWhere))
       .groupBy(matchPlayers.heroId, items.name, items.localizedName, items.imagePath);
 
     const itemMap = new Map<

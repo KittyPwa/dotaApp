@@ -1,11 +1,10 @@
 import type { PropsWithChildren, ReactNode } from "react";
 
-export function Page(props: PropsWithChildren<{ title: string; subtitle?: ReactNode; aside?: ReactNode }>) {
+export function Page(props: PropsWithChildren<{ title: ReactNode; subtitle?: ReactNode; aside?: ReactNode }>) {
   return (
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Local dataset</p>
           <h2>{props.title}</h2>
           {props.subtitle ? <div className="page-subtitle">{props.subtitle}</div> : null}
         </div>

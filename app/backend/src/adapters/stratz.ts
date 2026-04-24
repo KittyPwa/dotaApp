@@ -75,6 +75,7 @@ export interface StratzTelemetryEvent {
   x: number | null;
   y: number | null;
   z: number | null;
+  action: string | null;
 }
 
 export interface StratzMatchTelemetryPlayer {
@@ -123,11 +124,11 @@ export class StratzAdapter {
     variables: Record<string, unknown>
   ): Promise<ProviderFetchResult<GraphQLResponse<T>>> {
     this.assertConfigured();
-    const settings = await this.settingsService.getSettings();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
     this.rateLimitService.consume("stratz", {
-      perSecond: 20,
-      perMinute: 250,
-      perHour: 2000,
+      perSecond: settings.stratzPerSecondCap,
+      perMinute: settings.stratzPerMinuteCap,
+      perHour: settings.stratzPerHourCap,
       perDay: settings.stratzDailyRequestCap
     });
     const fetchedAt = Date.now();
@@ -247,7 +248,11 @@ export class StratzAdapter {
 
     const match = result.payload.data?.match;
     const wardEvents = (match?.playbackData?.wardEvents ?? []).filter(
-      (event) => event && event.action === "SPAWN" && typeof event.time === "number"
+      (event) =>
+        event &&
+        typeof event.time === "number" &&
+        (event.action === "SPAWN" || event.action === "DESPAWN") &&
+        (event.wardType === "OBSERVER" || event.wardType === "SENTRY")
     );
 
     const players = (match?.players ?? []).map<StratzMatchTelemetryPlayer>((player) => {
@@ -261,7 +266,8 @@ export class StratzAdapter {
           charges: null,
           x: event.positionX,
           y: event.positionY,
-          z: null
+          z: null,
+          action: event.action ?? null
         }));
       const sentryLog = playerWardEvents
         .filter((event) => event.wardType === "SENTRY")
@@ -272,7 +278,8 @@ export class StratzAdapter {
           charges: null,
           x: event.positionX,
           y: event.positionY,
-          z: null
+          z: null,
+          action: event.action ?? null
         }));
 
       return {
@@ -294,12 +301,13 @@ export class StratzAdapter {
             charges: null,
             x: null,
             y: null,
-            z: null
+            z: null,
+            action: null
           })),
         observerLog,
         sentryLog,
-        observerWardsPlaced: observerLog.length,
-        sentryWardsPlaced: sentryLog.length
+        observerWardsPlaced: observerLog.filter((entry) => entry.action !== "DESPAWN").length,
+        sentryWardsPlaced: sentryLog.filter((entry) => entry.action !== "DESPAWN").length
       };
     });
 

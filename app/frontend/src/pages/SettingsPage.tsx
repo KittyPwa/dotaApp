@@ -1,10 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  apiPost,
+  clearStoredAdminPassword,
+  getSessionColorblindModeOverride,
+  getSessionPatchScopeOverride,
+  getLocalAutoRefreshPlayerIdsOverride,
+  getLocalPrimaryPlayerIdOverride,
+  LOCAL_PLAYER_PREFERENCES_EVENT,
+  setLocalAutoRefreshPlayerIdsOverride,
+  setLocalPrimaryPlayerIdOverride,
+  setSessionColorblindModeOverride,
+  setSessionPatchScopeOverride,
+  storeAdminPassword
+} from "../api/client";
 import { Card } from "../components/Card";
+import { CommunityGraphView } from "../components/CommunityGraphView";
 import { Page } from "../components/Page";
 import { ErrorState, LoadingState } from "../components/State";
-import { useSaveSettings, useSettings } from "../hooks/useQueries";
+import { useCommunity, useSaveSettings, useSettings } from "../hooks/useQueries";
 
-type SettingsTab = "players" | "leagues" | "data" | "providers" | "accessibility" | "diagnostics";
+type SettingsTab = "players" | "leagues" | "data" | "providers" | "accessibility" | "diagnostics" | "community";
 
 function titleCaseSlug(slug: string) {
   return slug
@@ -39,6 +55,7 @@ function parseSavedLeagueLine(value: string) {
 }
 
 export function SettingsPage() {
+  const queryClient = useQueryClient();
   const query = useSettings();
   const save = useSaveSettings();
   const [activeTab, setActiveTab] = useState<SettingsTab>("players");
@@ -46,61 +63,198 @@ export function SettingsPage() {
   const [stratzApiKey, setStratzApiKey] = useState("");
   const [steamApiKey, setSteamApiKey] = useState("");
   const [primaryPlayerId, setPrimaryPlayerId] = useState("");
-  const [favoritePlayerIds, setFavoritePlayerIds] = useState("");
   const [trackedLeagues, setTrackedLeagues] = useState<Array<{ leagueId: number; slug: string; name: string }>>([]);
   const [leagueInput, setLeagueInput] = useState("");
   const [limitToRecentPatches, setLimitToRecentPatches] = useState(true);
   const [recentPatchCount, setRecentPatchCount] = useState("2");
   const [colorblindMode, setColorblindMode] = useState(false);
+  const [stratzPerSecondCap, setStratzPerSecondCap] = useState("20");
+  const [stratzPerMinuteCap, setStratzPerMinuteCap] = useState("250");
+  const [stratzPerHourCap, setStratzPerHourCap] = useState("2000");
   const [stratzDailyRequestCap, setStratzDailyRequestCap] = useState("10000");
   const [stratzTestPlayerId, setStratzTestPlayerId] = useState("148440404");
   const [backendDiag, setBackendDiag] = useState<string | null>(null);
   const [browserDiag, setBrowserDiag] = useState<string | null>(null);
   const [schemaDiag, setSchemaDiag] = useState<string | null>(null);
   const [diagRunning, setDiagRunning] = useState<null | "backend" | "browser" | "steam">(null);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState("");
+  const [adminUnlockError, setAdminUnlockError] = useState<string | null>(null);
+  const [adminUnlockPending, setAdminUnlockPending] = useState(false);
+
+  useEffect(() => {
+    const syncLocalPlayerPreferences = () => {
+      const localPrimaryPlayerId = getLocalPrimaryPlayerIdOverride();
+      setPrimaryPlayerId(localPrimaryPlayerId ? String(localPrimaryPlayerId) : "");
+    };
+
+    window.addEventListener(LOCAL_PLAYER_PREFERENCES_EVENT, syncLocalPlayerPreferences);
+    return () => {
+      window.removeEventListener(LOCAL_PLAYER_PREFERENCES_EVENT, syncLocalPlayerPreferences);
+    };
+  }, []);
 
   useEffect(() => {
     if (query.data) {
+      const sessionPatchOverride = getSessionPatchScopeOverride();
+      const sessionColorblindOverride = getSessionColorblindModeOverride();
+      const localPrimaryPlayerId = getLocalPrimaryPlayerIdOverride();
+      const localAutoRefreshPlayerIds = getLocalAutoRefreshPlayerIdsOverride();
       setOpenDotaApiKey(query.data.openDotaApiKey ?? "");
       setStratzApiKey(query.data.stratzApiKey ?? "");
       setSteamApiKey(query.data.steamApiKey ?? "");
-      setPrimaryPlayerId(query.data.primaryPlayerId ? String(query.data.primaryPlayerId) : "");
-      setFavoritePlayerIds(query.data.favoritePlayerIds.join(", "));
+      setPrimaryPlayerId(String(localPrimaryPlayerId ?? query.data.primaryPlayerId ?? ""));
       setTrackedLeagues(query.data.savedLeagues);
-      setLimitToRecentPatches(query.data.limitToRecentPatches);
-      setRecentPatchCount(String(query.data.recentPatchCount));
-      setColorblindMode(query.data.colorblindMode);
+      setLimitToRecentPatches(sessionPatchOverride.limitToRecentPatches ?? query.data.limitToRecentPatches);
+      setRecentPatchCount(String(sessionPatchOverride.recentPatchCount ?? query.data.recentPatchCount));
+      setColorblindMode(sessionColorblindOverride ?? query.data.colorblindMode);
+      setStratzPerSecondCap(String(query.data.stratzPerSecondCap));
+      setStratzPerMinuteCap(String(query.data.stratzPerMinuteCap));
+      setStratzPerHourCap(String(query.data.stratzPerHourCap));
       setStratzDailyRequestCap(String(query.data.stratzDailyRequestCap));
-      setStratzTestPlayerId(query.data.primaryPlayerId ? String(query.data.primaryPlayerId) : "148440404");
+      setStratzTestPlayerId(
+        String(localPrimaryPlayerId ?? query.data.primaryPlayerId ?? localAutoRefreshPlayerIds[0] ?? 148440404)
+      );
     }
   }, [query.data]);
 
-  const parsedFavoritePlayerIds = useMemo(
-    () =>
-      favoritePlayerIds
-        .split(",")
-        .map((entry) => Number(entry.trim()))
-        .filter((value, index, list) => Number.isInteger(value) && value > 0 && list.indexOf(value) === index),
-    [favoritePlayerIds]
-  );
+  const adminProtectionEnabled = query.data?.adminPasswordConfigured ?? false;
+  const adminUnlocked = query.data?.adminUnlocked ?? false;
+  const communityQuery = useCommunity(adminUnlocked);
+  const canManagePersistentSettings = !adminProtectionEnabled || adminUnlocked;
+  const canManageSessionPreferences = true;
+  const sessionOnlyTab = activeTab === "data" || activeTab === "accessibility";
+  const browserPlayerTab = activeTab === "players";
+  const canSubmitCurrentTab = canManagePersistentSettings || sessionOnlyTab || browserPlayerTab;
 
   const tabs: Array<{ id: SettingsTab; label: string }> = [
     { id: "players", label: "Players" },
     { id: "leagues", label: "Leagues" },
     { id: "data", label: "Data scope" },
-    { id: "providers", label: "Providers" },
-    { id: "accessibility", label: "Accessibility" },
-    { id: "diagnostics", label: "Diagnostics" }
+    { id: "accessibility", label: "Accessibility" }
   ];
+  if (!adminProtectionEnabled || adminUnlocked) {
+    tabs.push({ id: "providers", label: "Providers" }, { id: "diagnostics", label: "Diagnostics" }, { id: "community", label: "Community" });
+  }
+
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab(tabs[0]?.id ?? "leagues");
+    }
+  }, [activeTab, tabs]);
 
   return (
-    <Page
-      title="Settings"
-      subtitle="Everything here is stored locally in your SQLite database and only affects this machine."
-    >
+    <Page title="Settings">
       {query.isLoading ? <LoadingState label="Loading settings..." /> : null}
       {query.error ? <ErrorState error={query.error as Error} /> : null}
-      <Card title="Configuration">
+      {!adminProtectionEnabled ? (
+        <Card title="Admin password">
+          <div className="stack">
+            <p className="muted-inline">
+              Set an admin password once. It will be stored locally as a salted hash in SQLite and will protect settings and admin actions.
+            </p>
+            <label>
+              New password
+              <input
+                type="password"
+                value={adminPassword}
+                onChange={(event) => setAdminPassword(event.target.value)}
+                placeholder="At least 10 characters"
+              />
+            </label>
+            <label>
+              Confirm password
+              <input
+                type="password"
+                value={adminPasswordConfirm}
+                onChange={(event) => setAdminPasswordConfirm(event.target.value)}
+                placeholder="Repeat the password"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={adminUnlockPending || adminPassword.trim().length < 10 || adminPassword !== adminPasswordConfirm}
+              onClick={async () => {
+                setAdminUnlockPending(true);
+                setAdminUnlockError(null);
+                try {
+                  await apiPost("/api/admin/setup", { password: adminPassword.trim() });
+                  storeAdminPassword(adminPassword.trim());
+                  setAdminPasswordConfirm("");
+                  await query.refetch();
+                } catch (error) {
+                  clearStoredAdminPassword();
+                  setAdminUnlockError(error instanceof Error ? error.message : "Password setup failed.");
+                } finally {
+                  setAdminUnlockPending(false);
+                }
+              }}
+            >
+              {adminUnlockPending ? "Saving..." : "Set admin password"}
+            </button>
+            {adminPassword && adminPasswordConfirm && adminPassword !== adminPasswordConfirm ? (
+              <p className="form-error">Passwords do not match.</p>
+            ) : null}
+            {adminUnlockError ? <p className="form-error">{adminUnlockError}</p> : null}
+          </div>
+        </Card>
+      ) : null}
+      {adminProtectionEnabled ? (
+        <Card title="Admin access">
+          <div className="stack">
+            {adminUnlocked ? (
+              <>
+                <p className="muted-inline">Admin controls are unlocked for this browser session.</p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    clearStoredAdminPassword();
+                    setAdminPassword("");
+                    setAdminUnlockError(null);
+                    await query.refetch();
+                  }}
+                >
+                  Lock admin controls
+                </button>
+              </>
+            ) : (
+              <>
+                <label>
+                  Password
+                  <input
+                    type="password"
+                    value={adminPassword}
+                    onChange={(event) => setAdminPassword(event.target.value)}
+                    placeholder="Admin password"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={adminUnlockPending || !adminPassword.trim()}
+                  onClick={async () => {
+                    setAdminUnlockPending(true);
+                    setAdminUnlockError(null);
+                    try {
+                      await apiPost("/api/admin/unlock", { password: adminPassword.trim() });
+                      storeAdminPassword(adminPassword.trim());
+                      await query.refetch();
+                    } catch (error) {
+                      clearStoredAdminPassword();
+                      setAdminUnlockError(error instanceof Error ? error.message : "Unlock failed.");
+                    } finally {
+                      setAdminUnlockPending(false);
+                    }
+                  }}
+                >
+                  {adminUnlockPending ? "Unlocking..." : "Unlock admin controls"}
+                </button>
+                {adminUnlockError ? <p className="form-error">{adminUnlockError}</p> : null}
+              </>
+            )}
+          </div>
+        </Card>
+      ) : null}
+      <Card title="Settings">
         <div className="settings-tabs">
           {tabs.map((tab) => (
             <button
@@ -118,45 +272,89 @@ export function SettingsPage() {
           className="stack"
           onSubmit={(event) => {
             event.preventDefault();
+            if (!canSubmitCurrentTab) return;
             const parsedPrimaryPlayerId = primaryPlayerId.trim() ? Number(primaryPlayerId.trim()) : null;
             const parsedRecentPatchCount = Math.max(0, Number(recentPatchCount.trim()) || 0);
+            const parsedStratzPerSecondCap = Math.min(1000, Math.max(1, Number(stratzPerSecondCap.trim()) || 20));
+            const parsedStratzPerMinuteCap = Math.min(10000, Math.max(1, Number(stratzPerMinuteCap.trim()) || 250));
+            const parsedStratzPerHourCap = Math.min(100000, Math.max(1, Number(stratzPerHourCap.trim()) || 2000));
             const parsedStratzDailyRequestCap = Math.min(100000, Math.max(1, Number(stratzDailyRequestCap.trim()) || 10000));
+            if (activeTab === "players") {
+              const nextPrimaryPlayerId =
+                Number.isInteger(parsedPrimaryPlayerId) && (parsedPrimaryPlayerId ?? 0) > 0 ? parsedPrimaryPlayerId : null;
+              setLocalPrimaryPlayerIdOverride(nextPrimaryPlayerId);
+              setLocalAutoRefreshPlayerIdsOverride(getLocalAutoRefreshPlayerIdsOverride());
+              void queryClient.invalidateQueries({ queryKey: ["settings"] });
+              void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+              void queryClient.invalidateQueries({ queryKey: ["player"] });
+              void queryClient.invalidateQueries({ queryKey: ["player-compare"] });
+              return;
+            }
+            if (!canManagePersistentSettings && sessionOnlyTab) {
+              setSessionPatchScopeOverride({
+                limitToRecentPatches,
+                recentPatchCount: parsedRecentPatchCount
+              });
+              setSessionColorblindModeOverride(colorblindMode);
+              void queryClient.invalidateQueries({ queryKey: ["settings"] });
+              void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+              void queryClient.invalidateQueries({ queryKey: ["player"] });
+              void queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
+              void queryClient.invalidateQueries({ queryKey: ["hero"] });
+              void queryClient.invalidateQueries({ queryKey: ["player-compare"] });
+              return;
+            }
             save.mutate({
               openDotaApiKey: openDotaApiKey.trim() || null,
               stratzApiKey: stratzApiKey.trim() || null,
               steamApiKey: steamApiKey.trim() || null,
               primaryPlayerId:
                 Number.isInteger(parsedPrimaryPlayerId) && (parsedPrimaryPlayerId ?? 0) > 0 ? parsedPrimaryPlayerId : null,
-              favoritePlayerIds: parsedFavoritePlayerIds,
+              favoritePlayerIds: query.data?.favoritePlayerIds ?? [],
               savedLeagues: trackedLeagues,
               limitToRecentPatches,
               recentPatchCount: parsedRecentPatchCount,
               autoRefreshPlayerIds: query.data?.autoRefreshPlayerIds ?? [],
               colorblindMode,
-              stratzDailyRequestCap: parsedStratzDailyRequestCap
+              stratzPerSecondCap: parsedStratzPerSecondCap,
+              stratzPerMinuteCap: parsedStratzPerMinuteCap,
+              stratzPerHourCap: parsedStratzPerHourCap,
+              stratzDailyRequestCap: parsedStratzDailyRequestCap,
+              appMode: query.data?.appMode ?? "personal",
+              adminUnlocked: query.data?.adminUnlocked ?? false,
+              adminPasswordConfigured: query.data?.adminPasswordConfigured ?? false
             });
           }}
         >
           {activeTab === "players" ? (
             <div className="stack">
-              <label>
-                Your player ID
-                <input
-                  value={primaryPlayerId}
-                  onChange={(event) => setPrimaryPlayerId(event.target.value)}
-                  placeholder="Example: 148440404"
-                />
-              </label>
-              <label>
-                Favorite player IDs
-                <input
-                  value={favoritePlayerIds}
-                  onChange={(event) => setFavoritePlayerIds(event.target.value)}
-                  placeholder="Comma-separated IDs"
-                />
-              </label>
+              <div className="league-chip">
+                <div>
+                  <strong>Current player</strong>
+                  <span className="muted-inline">
+                    {primaryPlayerId ? `Steam ID ${primaryPlayerId}` : "No player selected in this browser yet."}
+                  </span>
+                </div>
+                {primaryPlayerId ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLocalPrimaryPlayerIdOverride(null);
+                      void query.refetch();
+                      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+                      void queryClient.invalidateQueries({ queryKey: ["player"] });
+                      void queryClient.invalidateQueries({ queryKey: ["player-compare"] });
+                    }}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
               <p className="muted-inline">
-                Favorites drive the dashboard and compare quick-picks. Current valid favorites: {parsedFavoritePlayerIds.length}.
+                Set your player directly from a player page. Favorites are then loaded from the local database for that player.
+              </p>
+              <p className="muted-inline">
+                Favorite players in current view: {query.data?.favoritePlayerIds.length ?? 0}
               </p>
             </div>
           ) : null}
@@ -173,12 +371,14 @@ export function SettingsPage() {
                 </div>
                 <div className="league-add-row">
                   <input
+                    disabled={!canManagePersistentSettings}
                     value={leagueInput}
                     onChange={(event) => setLeagueInput(event.target.value)}
                     placeholder="18602-french-only-league"
                   />
                   <button
                     type="button"
+                    disabled={!canManagePersistentSettings}
                     onClick={() => {
                       const parsed = parseSavedLeagueLine(leagueInput);
                       if (!parsed) return;
@@ -205,6 +405,8 @@ export function SettingsPage() {
                         </div>
                         <button
                           type="button"
+                          disabled={!canManagePersistentSettings}
+                          hidden={adminProtectionEnabled && !adminUnlocked}
                           onClick={() => setTrackedLeagues((current) => current.filter((entry) => entry.leagueId !== league.leagueId))}
                         >
                           Remove
@@ -226,6 +428,7 @@ export function SettingsPage() {
               <label className="checkbox-row">
                 <input
                   type="checkbox"
+                  disabled={!canManageSessionPreferences}
                   checked={limitToRecentPatches}
                   onChange={(event) => setLimitToRecentPatches(event.target.checked)}
                 />
@@ -236,6 +439,7 @@ export function SettingsPage() {
                   Previous patches to include
                   <input
                     type="number"
+                    disabled={!canManageSessionPreferences}
                     min={0}
                     step={1}
                     value={recentPatchCount}
@@ -254,43 +458,59 @@ export function SettingsPage() {
 
           {activeTab === "providers" ? (
             <div className="stack">
-              <label>
-                OpenDota API key
-                <input value={openDotaApiKey} onChange={(event) => setOpenDotaApiKey(event.target.value)} placeholder="Optional" />
-              </label>
-              <label>
-                STRATZ API key
-                <input
-                  value={stratzApiKey}
-                  onChange={(event) => setStratzApiKey(event.target.value)}
-                  placeholder="Required for STRATZ enrichment"
-                />
-              </label>
-              <label>
-                Steam Web API key
-                <input
-                  value={steamApiKey}
-                  onChange={(event) => setSteamApiKey(event.target.value)}
-                  placeholder="Used for Valve Dota match history and league sync"
-                />
-              </label>
-              <label>
-                STRATZ daily request cap
-                <input
-                  type="number"
-                  min={1}
-                  max={100000}
-                  step={1}
-                  value={stratzDailyRequestCap}
-                  onChange={(event) => setStratzDailyRequestCap(event.target.value)}
-                />
-                <span className="muted-inline">
-                  Hard caps enforced locally: `20/s`, `250/min`, `2000/h`, and this daily limit.
-                </span>
-              </label>
-              <p className="muted-inline">
-                STRATZ is used to enrich telemetry when OpenDota is missing timelines, purchases, or ward event data.
-              </p>
+              <Card title="OpenDota API">
+                <label>
+                  OpenDota API key
+                  <input disabled={!canManagePersistentSettings} value={openDotaApiKey} onChange={(event) => setOpenDotaApiKey(event.target.value)} placeholder="Optional" />
+                </label>
+                <p className="muted-inline">Used for public player/match/hero data. Optional for local MVP usage.</p>
+              </Card>
+              <Card title="STRATZ">
+                <div className="stack compact">
+                  <label>
+                    STRATZ API key
+                    <input
+                      disabled={!canManagePersistentSettings}
+                      value={stratzApiKey}
+                      onChange={(event) => setStratzApiKey(event.target.value)}
+                      placeholder="Required for STRATZ enrichment"
+                    />
+                  </label>
+                  <div className="two-column">
+                    <label>
+                      Per second cap
+                      <input disabled={!canManagePersistentSettings} type="number" min={1} max={1000} step={1} value={stratzPerSecondCap} onChange={(event) => setStratzPerSecondCap(event.target.value)} />
+                    </label>
+                    <label>
+                      Per minute cap
+                      <input disabled={!canManagePersistentSettings} type="number" min={1} max={10000} step={1} value={stratzPerMinuteCap} onChange={(event) => setStratzPerMinuteCap(event.target.value)} />
+                    </label>
+                    <label>
+                      Per hour cap
+                      <input disabled={!canManagePersistentSettings} type="number" min={1} max={100000} step={1} value={stratzPerHourCap} onChange={(event) => setStratzPerHourCap(event.target.value)} />
+                    </label>
+                    <label>
+                      Per day cap
+                      <input disabled={!canManagePersistentSettings} type="number" min={1} max={100000} step={1} value={stratzDailyRequestCap} onChange={(event) => setStratzDailyRequestCap(event.target.value)} />
+                    </label>
+                  </div>
+                  <p className="muted-inline">
+                    These caps are enforced locally before any STRATZ request is sent.
+                  </p>
+                </div>
+              </Card>
+              <Card title="Steam Web API">
+                <label>
+                  Steam Web API key
+                  <input
+                    disabled={!canManagePersistentSettings}
+                    value={steamApiKey}
+                    onChange={(event) => setSteamApiKey(event.target.value)}
+                    placeholder="Used for Valve Dota match history and league sync"
+                  />
+                </label>
+                <p className="muted-inline">Used for Valve league match listing and Steam-backed Dota endpoints.</p>
+              </Card>
             </div>
           ) : null}
 
@@ -299,6 +519,7 @@ export function SettingsPage() {
               <label className="checkbox-row">
                 <input
                   type="checkbox"
+                  disabled={!canManageSessionPreferences}
                   checked={colorblindMode}
                   onChange={(event) => setColorblindMode(event.target.checked)}
                 />
@@ -326,7 +547,7 @@ export function SettingsPage() {
               <div className="action-group">
                 <button
                   type="button"
-                  disabled={diagRunning !== null}
+                  disabled={diagRunning !== null || !canManagePersistentSettings}
                   onClick={async () => {
                     setDiagRunning("steam");
                     setBackendDiag(null);
@@ -345,7 +566,7 @@ export function SettingsPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={diagRunning !== null}
+                  disabled={diagRunning !== null || !canManagePersistentSettings}
                   onClick={async () => {
                     const playerId = Number(stratzTestPlayerId.trim());
                     if (!Number.isInteger(playerId) || playerId <= 0) {
@@ -370,7 +591,7 @@ export function SettingsPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={diagRunning !== null || !stratzApiKey.trim()}
+                  disabled={diagRunning !== null || !stratzApiKey.trim() || !canManagePersistentSettings}
                   onClick={async () => {
                     const playerId = Number(stratzTestPlayerId.trim());
                     if (!Number.isInteger(playerId) || playerId <= 0) {
@@ -407,7 +628,7 @@ export function SettingsPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={diagRunning !== null || !stratzApiKey.trim()}
+                  disabled={diagRunning !== null || !stratzApiKey.trim() || !canManagePersistentSettings}
                   onClick={async () => {
                     setDiagRunning("browser");
                     setSchemaDiag(null);
@@ -443,9 +664,31 @@ export function SettingsPage() {
             </div>
           ) : null}
 
+          {activeTab === "community" ? (
+            <div className="stack">
+              {communityQuery.isLoading ? <LoadingState label="Loading community links..." /> : null}
+              {communityQuery.error ? <ErrorState error={communityQuery.error as Error} /> : null}
+              {communityQuery.data ? (
+                communityQuery.data.nodes.length === 0 ? (
+                  <Card title="Community">
+                    <p className="muted-inline">No favorite relationships stored yet.</p>
+                  </Card>
+                ) : (
+                  <CommunityGraphView graph={communityQuery.data} />
+                )
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="action-group">
-            <button type="submit" disabled={save.isPending}>
-              {save.isPending ? "Saving..." : "Save settings"}
+            <button type="submit" disabled={save.isPending || !canSubmitCurrentTab}>
+              {save.isPending
+                ? "Saving..."
+                : activeTab === "players"
+                  ? "Save for this browser"
+                  : !canManagePersistentSettings && sessionOnlyTab
+                    ? "Apply for this session"
+                    : "Save settings"}
             </button>
             {save.isError ? <p className="form-error">{(save.error as Error).message}</p> : null}
             {save.isSuccess ? <p className="form-success">Settings saved locally.</p> : null}

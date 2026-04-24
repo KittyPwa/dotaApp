@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  CommunityGraph,
   DashboardResponse,
   HeroOverview,
   HeroStat,
@@ -20,17 +21,30 @@ export function useDashboard() {
   });
 }
 
-export function useHeroStats() {
+export function useHeroStats(filters?: { leagueId?: number | null }) {
+  const query = new URLSearchParams();
+  if (filters?.leagueId) query.set("leagueId", String(filters.leagueId));
+  const suffix = query.toString();
+
   return useQuery({
-    queryKey: ["hero-stats"],
-    queryFn: () => apiGet<HeroStat[]>("/api/heroes/stats")
+    queryKey: ["hero-stats", filters?.leagueId ?? null],
+    queryFn: () => apiGet<HeroStat[]>(`/api/heroes/stats${suffix ? `?${suffix}` : ""}`)
   });
 }
 
-export function useHero(heroId: number | null) {
+export function useHero(
+  heroId: number | null,
+  filters?: { leagueId?: number | null; minRankTier?: number | null; maxRankTier?: number | null }
+) {
+  const query = new URLSearchParams();
+  if (filters?.leagueId) query.set("leagueId", String(filters.leagueId));
+  if (filters?.minRankTier) query.set("minRankTier", String(filters.minRankTier));
+  if (filters?.maxRankTier) query.set("maxRankTier", String(filters.maxRankTier));
+  const suffix = query.toString();
+
   return useQuery({
-    queryKey: ["hero", heroId],
-    queryFn: () => apiGet<HeroOverview>(`/api/heroes/${heroId}`),
+    queryKey: ["hero", heroId, filters?.leagueId ?? null, filters?.minRankTier ?? null, filters?.maxRankTier ?? null],
+    queryFn: () => apiGet<HeroOverview>(`/api/heroes/${heroId}${suffix ? `?${suffix}` : ""}`),
     enabled: heroId !== null
   });
 }
@@ -64,10 +78,19 @@ export function useSyncLeague(leagueId: number | null) {
   });
 }
 
-export function usePlayer(playerId: number | null) {
+export function usePlayer(
+  playerId: number | null,
+  filters?: { leagueId?: number | null; queue?: "all" | "ranked" | "unranked" | "turbo"; heroId?: number | null }
+) {
+  const query = new URLSearchParams();
+  if (filters?.leagueId) query.set("leagueId", String(filters.leagueId));
+  if (filters?.queue && filters.queue !== "all") query.set("queue", filters.queue);
+  if (filters?.heroId) query.set("heroId", String(filters.heroId));
+  const suffix = query.toString();
+
   return useQuery({
-    queryKey: ["player", playerId],
-    queryFn: () => apiGet<PlayerOverview>(`/api/players/${playerId}`),
+    queryKey: ["player", playerId, filters?.leagueId ?? null, filters?.queue ?? "all", filters?.heroId ?? null],
+    queryFn: () => apiGet<PlayerOverview>(`/api/players/${playerId}${suffix ? `?${suffix}` : ""}`),
     enabled: playerId !== null
   });
 }
@@ -108,6 +131,14 @@ export function useSettings() {
   return useQuery({
     queryKey: ["settings"],
     queryFn: () => apiGet<SettingsPayload>("/api/settings")
+  });
+}
+
+export function useCommunity(enabled = true) {
+  return useQuery({
+    queryKey: ["community"],
+    queryFn: () => apiGet<CommunityGraph>("/api/community"),
+    enabled
   });
 }
 

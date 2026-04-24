@@ -5,7 +5,7 @@ import { IconImage } from "../components/IconImage";
 import { MetricGrid } from "../components/MetricGrid";
 import { Page } from "../components/Page";
 import { ErrorState, LoadingState } from "../components/State";
-import { useMatch, useRefreshMatch } from "../hooks/useQueries";
+import { useMatch, useRefreshMatch, useSettings } from "../hooks/useQueries";
 import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
 function formatPercent(value: number) {
@@ -197,6 +197,7 @@ const itemSlugOverrides: Record<string, string> = {
   crystalys: "lesser_crit",
   daedalus: "greater_crit",
   desolator: "desolator",
+  dust_of_appearance: "dust",
   dragon_lance: "dragon_lance",
   eye_of_skadi: "skadi",
   hurricane_pike: "hurricane_pike",
@@ -205,7 +206,17 @@ const itemSlugOverrides: Record<string, string> = {
   linkens_sphere: "sphere",
   linken_sphere: "sphere",
   monkey_king_bar: "monkey_king_bar",
+  observer: "ward_observer",
+  observer_ward: "ward_observer",
+  portal_scroll: "tpscroll",
+  scroll_of_town_portal: "tpscroll",
+  sentry: "ward_sentry",
+  sentry_ward: "ward_sentry",
   shadow_blade: "invis_sword",
+  smoke: "smoke_of_deceit",
+  teleport_scroll: "tpscroll",
+  town_portal_scroll: "tpscroll",
+  tp_scroll: "tpscroll",
   swift_blink: "swift_blink"
 };
 
@@ -235,6 +246,104 @@ function isCoreTimelineItem(itemName: string) {
   return completedItemSlugs.has(slug) || (cost !== null && cost > 1500);
 }
 
+const ignoredInventoryItemSlugs = new Set([
+  "tango",
+  "enchanted_mango",
+  "clarity",
+  "faerie_fire",
+  "flask",
+  "ward_observer",
+  "ward_sentry",
+  "ward_dispenser",
+  "observer",
+  "observer_ward",
+  "ward_observer",
+  "sentry",
+  "sentry_ward",
+  "ward_sentry",
+  "smoke_of_deceit",
+  "smoke",
+  "dust",
+  "dust_of_appearance",
+  "tpscroll",
+  "tp_scroll",
+  "town_portal_scroll",
+  "blood_grenade",
+  "cheese",
+  "aegis",
+  "divine_rapier_recipe"
+]);
+
+const teleportItemSlugs = new Set(["tpscroll"]);
+const neutralItemSlugs = new Set([
+  "trusty_shovel",
+  "arcane_ring",
+  "broom_handle",
+  "faded_broach",
+  "keen_optic",
+  "mysterious_hat",
+  "pig_pole",
+  "royal_jelly",
+  "seeds_of_serenity",
+  "safety_bubble",
+  "occult_bracelet",
+  "duelist_gloves",
+  "spark_of_courage",
+  "gossamer_cape",
+  "lance_of_pursuit",
+  "philosophers_stone",
+  "pupil_gift",
+  "ring_of_aquila",
+  "vambrace",
+  "bullwhip",
+  "dragon_scale",
+  "essence_distiller",
+  "essence_ring",
+  "eye_of_the_vizier",
+  "grove_bow",
+  "quickening_charm",
+  "specialists_array",
+  "ceremonial_robe",
+  "cloak_of_flames",
+  "elven_tunic",
+  "psychic_headband",
+  "timeless_relic",
+  "trickster_cloak",
+  "ninja_gear",
+  "ascetic_cap",
+  "avian_rime",
+  "pirate_hat",
+  "force_boots",
+  "seer_stone",
+  "giants_ring",
+  "book_of_shadows",
+  "mirror_shield",
+  "stygian_desolator",
+  "woodland_striders",
+  "unrelenting_eye",
+  "flicker",
+  "minotaur_horn",
+  "stormcrafter",
+  "penta_edged_sword",
+  "vital_toadstool"
+]);
+
+const startingStackCounts: Record<string, number> = {
+  tango: 3,
+  enchanted_mango: 1,
+  ward_observer: 1,
+  ward_sentry: 1,
+  blood_grenade: 1,
+  clarity: 1,
+  faerie_fire: 1,
+  iron_branch: 1,
+  circlet: 1,
+  magic_stick: 1,
+  gauntlets: 1,
+  slippers: 1,
+  mantle: 1
+};
+
 function getLevelMarkers(cumulativeXp: number[]) {
   const markers: Array<{ index: number; value: number; label: string }> = [];
   for (let level = 2; level <= xpForLevel.length; level += 1) {
@@ -245,6 +354,20 @@ function getLevelMarkers(cumulativeXp: number[]) {
     }
   }
   return markers;
+}
+
+function getLevelFromXp(totalXp: number | null) {
+  if (totalXp === null) return null;
+  let level = 1;
+  for (let index = 0; index < xpForLevel.length; index += 1) {
+    if (totalXp >= xpForLevel[index]) level = index + 1;
+  }
+  return level;
+}
+
+function getTimelineValueAt(values: number[], minuteIndex: number) {
+  if (values.length === 0) return null;
+  return values[Math.min(values.length - 1, Math.max(0, minuteIndex))] ?? null;
 }
 
 function summarizeProviderStatus(status: {
@@ -551,12 +674,8 @@ function TeamTimelinePanel({
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const radiantStroke = getCssVar("--team-radiant-strong", "rgba(39, 174, 96, 0.95)");
   const direStroke = getCssVar("--team-dire-strong", "rgba(192, 57, 43, 0.95)");
-  const perMinuteRadiantValues = perMinuteTimeline(radiantValues);
-  const perMinuteDireValues = perMinuteTimeline(direValues);
-  const cumulativeRadiantValues = totalTimeline(radiantValues);
-  const cumulativeDireValues = totalTimeline(direValues);
-  const activeRadiantValues = selectedMode === "perMinute" ? perMinuteRadiantValues : cumulativeRadiantValues;
-  const activeDireValues = selectedMode === "perMinute" ? perMinuteDireValues : cumulativeDireValues;
+  const activeRadiantValues = radiantValues;
+  const activeDireValues = direValues;
   const effectiveIndex =
     hoveredIndex === null
       ? Math.max(activeRadiantValues.length, activeDireValues.length) - 1
@@ -634,7 +753,7 @@ function TeamTimelineOverlayPanel({
   selectedMode,
   selectedTabs
 }: {
-  getValues: (tab: Exclude<TeamTimelineTab, "items">) => { radiant: number[]; dire: number[] };
+  getValues: (tab: Exclude<TeamTimelineTab, "items">, mode: TimelineMode) => { radiant: number[]; dire: number[] };
   players: TimelinePlayer[];
   timelineMinutes: number[];
   selectedMode: TimelineMode;
@@ -647,9 +766,9 @@ function TeamTimelineOverlayPanel({
   }>;
   const allSeries = selectedMetricTabs.flatMap((selection) => {
     const tab = timelineTabs.find((entry) => entry.key === selection.tab);
-    const values = getValues(selection.tab);
-    const radiantValues = selection.mode === "perMinute" ? perMinuteTimeline(values.radiant) : totalTimeline(values.radiant);
-    const direValues = selection.mode === "perMinute" ? perMinuteTimeline(values.dire) : totalTimeline(values.dire);
+    const values = getValues(selection.tab, selection.mode);
+    const radiantValues = values.radiant;
+    const direValues = values.dire;
     const color = getTimelineMetricColor(selection.tab);
     return [
       {
@@ -700,9 +819,9 @@ function TeamTimelineOverlayPanel({
       <div className="timeline-overlay-legend">
         {selectedMetricTabs.map((selection) => {
           const tab = timelineTabs.find((entry) => entry.key === selection.tab);
-          const values = getValues(selection.tab);
-          const radiantValues = selection.mode === "perMinute" ? perMinuteTimeline(values.radiant) : totalTimeline(values.radiant);
-          const direValues = selection.mode === "perMinute" ? perMinuteTimeline(values.dire) : totalTimeline(values.dire);
+          const values = getValues(selection.tab, selection.mode);
+          const radiantValues = values.radiant;
+          const direValues = values.dire;
           return (
             <div key={`team-overlay-legend-${selection.tab}-${selection.mode}`} className="timeline-overlay-legend-item">
               <span className="timeline-legend-swatch" style={{ backgroundColor: getTimelineMetricColor(selection.tab) }} />
@@ -733,17 +852,19 @@ function TeamTimelineOverlayPanel({
   );
 }
 
-type TimelineTab = "gold" | "xp" | "lastHits" | "heroDamage" | "damageTaken" | "items";
-type TeamTimelineTab = "gold" | "xp" | "lastHits" | "heroDamage" | "damageTaken" | "items";
+type TimelineTab = "gold" | "xp" | "lastHits" | "heroDamage" | "damageTaken" | "vision" | "items";
+type TeamTimelineTab = "gold" | "xp" | "lastHits" | "heroDamage" | "damageTaken" | "vision" | "items";
 type OverlayTimelineTab = Exclude<TimelineTab, "items"> | "items";
 type OverlaySelection = { tab: OverlayTimelineTab; mode: TimelineMode };
+type MatchTab = "overview" | "vision" | "timelines" | "rosters";
 
 const timelineTabs: Array<{ key: Exclude<TimelineTab, "items">; label: string; shortLabel: string }> = [
   { key: "gold", label: "Gold", shortLabel: "G" },
   { key: "xp", label: "XP", shortLabel: "XP" },
   { key: "lastHits", label: "Last hits", shortLabel: "LH" },
   { key: "heroDamage", label: "Hero damage", shortLabel: "HD" },
-  { key: "damageTaken", label: "Damage taken", shortLabel: "DT" }
+  { key: "damageTaken", label: "Damage taken", shortLabel: "DT" },
+  { key: "vision", label: "Vision", shortLabel: "V" }
 ];
 
 function getTimelineMetricColor(type: Exclude<TimelineTab, "items">) {
@@ -752,7 +873,8 @@ function getTimelineMetricColor(type: Exclude<TimelineTab, "items">) {
     xp: getCssVar("--metric-xp", "#5c7cfa"),
     lastHits: getCssVar("--metric-last-hits", "#2f9e44"),
     heroDamage: getCssVar("--metric-hero-damage", "#e03131"),
-    damageTaken: getCssVar("--metric-damage-taken", "#7048e8")
+    damageTaken: getCssVar("--metric-damage-taken", "#7048e8"),
+    vision: getCssVar("--metric-vision", "#0ea5a4")
   };
   return colors[type];
 }
@@ -811,6 +933,14 @@ function TimelineMetricIcon({ type }: { type: TimelineTab }) {
       </svg>
     );
   }
+  if (type === "vision") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z" />
+        <circle cx="12" cy="12" r="3.25" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6 7h12v10H6zM8 5h8M8 19h8" />
@@ -833,10 +963,14 @@ type TimelinePlayer = {
   firstPurchaseTimes: Record<string, number>;
   itemUses: Record<string, number>;
   purchaseLog: Array<{ time: number; key: string; charges: number | null }>;
-  observerLog: Array<{ time: number; x: number | null; y: number | null; z: number | null }>;
-  sentryLog: Array<{ time: number; x: number | null; y: number | null; z: number | null }>;
+  observerLog: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>;
+  sentryLog: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>;
   observerWardsPlaced: number | null;
   sentryWardsPlaced: number | null;
+  finalInventory: Array<{ name: string; imageUrl: string | null } | null>;
+  finalBackpack: Array<{ name: string; imageUrl: string | null } | null>;
+  finalNeutral?: { name: string; imageUrl: string | null } | null;
+  items: Array<{ name: string; imageUrl: string | null }>;
 };
 
 function getPlayerTimelineValues(player: TimelinePlayer, tab: Exclude<TimelineTab, "items">) {
@@ -848,7 +982,9 @@ function getPlayerTimelineValues(player: TimelinePlayer, tab: Exclude<TimelineTa
         ? player.lastHitsTimeline
         : tab === "heroDamage"
           ? player.heroDamageTimeline
-          : player.damageTakenTimeline;
+          : tab === "vision"
+            ? getWardPlacementTimeline(player.observerLog, Math.max(0, player.goldTimeline.length - 1, player.xpTimeline.length - 1, player.lastHitsTimeline.length - 1, player.heroDamageTimeline.length - 1, player.damageTakenTimeline.length - 1))
+            : player.damageTakenTimeline;
 }
 
 function getSmokePurchaseCount(player: TimelinePlayer) {
@@ -859,6 +995,102 @@ function getSmokeUseCount(player: TimelinePlayer) {
   return Object.entries(player.itemUses).reduce((sum, [key, value]) => {
     return key.toLowerCase().includes("smoke") ? sum + value : sum;
   }, 0);
+}
+
+function getTimelinePurchaseCount(player: TimelinePlayer, keyword: string, second: number) {
+  return player.purchaseLog.filter((entry) => entry.time <= second && entry.key.toLowerCase().includes(keyword)).length;
+}
+
+function getTimelineWardPlacementCount(
+  entries: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>,
+  second: number
+) {
+  return entries.filter((entry) => entry.time <= second && (entry.action ?? "SPAWN").toUpperCase() !== "DESPAWN").length;
+}
+
+type WardTimelineEntry = { time: number; x: number | null; y: number | null; z: number | null; action?: string | null };
+
+function getWardCoordinateKey(entry: { x: number | null; y: number | null; z: number | null }) {
+  return `${Math.round(entry.x ?? -999)}-${Math.round(entry.y ?? -999)}`;
+}
+
+function findMatchingWardIndex<T extends WardTimelineEntry>(active: T[], target: WardTimelineEntry) {
+  const exactKey = getWardCoordinateKey(target);
+  const exactIndex = active.findIndex((entry) => getWardCoordinateKey(entry) === exactKey);
+  if (exactIndex >= 0) return exactIndex;
+
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < active.length; index += 1) {
+    const entry = active[index];
+    if (entry.x === null || entry.y === null || target.x === null || target.y === null) continue;
+    const distance = Math.hypot(entry.x - target.x, entry.y - target.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  }
+  return bestDistance <= 450 ? bestIndex : -1;
+}
+
+function buildWardTimelineState<T extends WardTimelineEntry>(entries: T[], second: number) {
+  const placed: T[] = [];
+  const active: T[] = [];
+  const completedLifetimes: number[] = [];
+  const sortedEntries = [...entries].sort((left, right) => left.time - right.time);
+  for (const entry of sortedEntries) {
+    if (entry.time > second) break;
+    const action = (entry.action ?? "SPAWN").toUpperCase();
+    if (action === "DESPAWN") {
+      const matchIndex = findMatchingWardIndex(active, entry);
+      if (matchIndex >= 0) {
+        const [matchedWard] = active.splice(matchIndex, 1);
+        completedLifetimes.push(Math.max(0, entry.time - matchedWard.time));
+      }
+    } else {
+      placed.push(entry);
+      active.push(entry);
+    }
+  }
+  return { placed, active, completedLifetimes };
+}
+
+function getWardPlacementsPerMinute(
+  entries: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>,
+  maxMinute: number
+) {
+  const values = Array.from({ length: maxMinute + 1 }, () => 0);
+  for (const entry of entries) {
+    if ((entry.action ?? "SPAWN").toUpperCase() === "DESPAWN") continue;
+    const minute = Math.max(0, Math.min(maxMinute, Math.floor(entry.time / 60)));
+    values[minute] += 1;
+  }
+  return values;
+}
+
+function getWardPlacementTimeline(
+  entries: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>,
+  maxMinute: number
+) {
+  return cumulativeTimeline(getWardPlacementsPerMinute(entries, maxMinute));
+}
+
+function getActiveWardTimeline(
+  entries: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>,
+  maxMinute: number
+) {
+  return Array.from({ length: maxMinute + 1 }, (_, minute) => buildWardTimelineState(entries, minute * 60).active.length);
+}
+
+function getWardEfficiencyPercent(entries: WardTimelineEntry[], second: number, wardLifetimeSeconds: number) {
+  const { active, completedLifetimes } = buildWardTimelineState(entries, second);
+  const ongoingLifetimes = active.map((entry) => Math.max(0, second - entry.time));
+  const allLifetimes = [...completedLifetimes, ...ongoingLifetimes];
+  if (allLifetimes.length === 0) return null;
+  const efficiency =
+    allLifetimes.reduce((sum, value) => sum + Math.min(value, wardLifetimeSeconds) / wardLifetimeSeconds, 0) /
+    allLifetimes.length;
+  return efficiency * 100;
 }
 
 function getItemTimingEvents(player: TimelinePlayer, onlyCoreItems: boolean) {
@@ -875,13 +1107,290 @@ function getItemTimingEvents(player: TimelinePlayer, onlyCoreItems: boolean) {
 
   const deduped = new Map<string, { itemName: string; time: number; cost: number | null }>();
   for (const event of [...fromFirstPurchase, ...fromPurchaseLog]) {
-    if (!Number.isFinite(event.time) || event.time < 0) continue;
+    if (!Number.isFinite(event.time)) continue;
     if (onlyCoreItems && !isCoreTimelineItem(event.itemName)) continue;
     const key = `${normalizeItemSlug(event.itemName)}-${event.time}`;
     if (!deduped.has(key)) deduped.set(key, event);
   }
 
   return [...deduped.values()].sort((left, right) => left.time - right.time);
+}
+
+function getRosterItemImage(player: TimelinePlayer, itemName: string) {
+  const normalizedTarget = normalizeItemSlug(itemName);
+  const catalog = [
+    ...player.items,
+    ...player.finalInventory.filter((item): item is { name: string; imageUrl: string | null } => Boolean(item)),
+    ...player.finalBackpack.filter((item): item is { name: string; imageUrl: string | null } => Boolean(item)),
+    ...(player.finalNeutral ? [player.finalNeutral] : [])
+  ];
+  const directMatch = catalog.find((item) => normalizeItemSlug(item.name) === normalizedTarget);
+  return directMatch?.imageUrl ?? getItemImageUrl(itemName);
+}
+
+type RosterSlot = {
+  key: string;
+  name: string;
+  imageUrl: string | null;
+  count?: number;
+};
+
+type RosterInventoryState = {
+  inventory: Array<RosterSlot | null>;
+  backpack: Array<RosterSlot | null>;
+  teleport: RosterSlot | null;
+  neutral: RosterSlot | null;
+};
+
+function toRosterSlot(player: TimelinePlayer, item: { name: string; imageUrl: string | null }, key: string, count = 1): RosterSlot {
+  return {
+    key,
+    name: item.name,
+    imageUrl: item.imageUrl ?? getRosterItemImage(player, item.name),
+    ...(count > 1 ? { count } : {})
+  };
+}
+
+function isTeleportItem(itemName: string) {
+  return teleportItemSlugs.has(normalizeItemSlug(itemName));
+}
+
+function isNeutralItem(itemName: string) {
+  const slug = normalizeItemSlug(itemName);
+  return neutralItemSlugs.has(slug) || slug.includes("neutral_token");
+}
+
+function buildFinalRosterInventory(player: TimelinePlayer): RosterInventoryState {
+  const inventory = [...player.finalInventory];
+  const backpack = [...player.finalBackpack];
+  let teleport: RosterSlot | null = null;
+  let neutral: RosterSlot | null = player.finalNeutral ? toRosterSlot(player, player.finalNeutral, "neutral-final") : null;
+
+  const extractTeleport = (slots: Array<{ name: string; imageUrl: string | null } | null>, prefix: string) => {
+    for (let index = 0; index < slots.length; index += 1) {
+      const slot = slots[index];
+      if (!slot || !isTeleportItem(slot.name)) continue;
+      teleport = toRosterSlot(player, slot, `${prefix}-tp-${index}`);
+      slots[index] = null;
+      return;
+    }
+  };
+
+  extractTeleport(inventory, "inventory");
+  if (!teleport) extractTeleport(backpack, "backpack");
+
+  const extractNeutral = (slots: Array<{ name: string; imageUrl: string | null } | null>, prefix: string) => {
+    if (neutral) return;
+    for (let index = 0; index < slots.length; index += 1) {
+      const slot = slots[index];
+      if (!slot || !isNeutralItem(slot.name)) continue;
+      neutral = toRosterSlot(player, slot, `${prefix}-neutral-${index}`);
+      slots[index] = null;
+      return;
+    }
+  };
+
+  extractNeutral(inventory, "inventory");
+  extractNeutral(backpack, "backpack");
+
+  return {
+    inventory: Array.from({ length: 6 }, (_, index) => {
+      const slot = inventory[index];
+      return slot ? toRosterSlot(player, slot, `inventory-final-${index}`) : null;
+    }),
+    backpack: Array.from({ length: 3 }, (_, index) => {
+      const slot = backpack[index];
+      return slot ? toRosterSlot(player, slot, `backpack-final-${index}`) : null;
+    }),
+    teleport,
+    neutral
+  };
+}
+
+function buildGroupedRosterSlots(
+  player: TimelinePlayer,
+  events: Array<{ itemName: string; slug: string; time: number; cost: number | null }>,
+  options?: { treatStartingStacks?: boolean }
+) {
+  const grouped = new Map<
+    string,
+    { itemName: string; slug: string; firstTime: number; imageUrl: string | null; count: number; cost: number | null }
+  >();
+
+  for (const event of events) {
+    const groupingSlug = event.slug === "ward_observer" || event.slug === "ward_sentry" ? "ward_dispenser" : event.slug;
+    const groupingName =
+      groupingSlug === "ward_dispenser"
+        ? "Observer and Sentry Wards"
+        : event.itemName;
+    const current = grouped.get(groupingSlug);
+    const increment =
+      options?.treatStartingStacks && event.time <= 0
+        ? startingStackCounts[event.slug] ?? 1
+        : 1;
+    if (current) {
+      current.count += increment;
+      current.firstTime = Math.min(current.firstTime, event.time);
+      if ((current.cost ?? 0) < (event.cost ?? 0)) {
+        current.cost = event.cost ?? current.cost;
+      }
+      continue;
+    }
+
+    grouped.set(groupingSlug, {
+      itemName: groupingName,
+      slug: groupingSlug,
+      firstTime: event.time,
+      imageUrl: getRosterItemImage(player, groupingSlug),
+      count: increment,
+      cost: event.cost,
+    });
+  }
+
+  return [...grouped.values()].sort((left, right) => {
+    const leftWeight = (left.cost ?? 0) >= 1500 || isCoreTimelineItem(left.itemName) ? 1 : 0;
+    const rightWeight = (right.cost ?? 0) >= 1500 || isCoreTimelineItem(right.itemName) ? 1 : 0;
+    if (leftWeight !== rightWeight) return rightWeight - leftWeight;
+    if (left.firstTime !== right.firstTime) return left.firstTime - right.firstTime;
+    return left.itemName.localeCompare(right.itemName);
+  });
+}
+
+function buildInventoryCandidates(player: TimelinePlayer, second: number) {
+  const fallbackEvents = Object.entries(player.firstPurchaseTimes).map(([itemName, time]) => ({
+    itemName,
+    time,
+    cost: getKnownItemCost(itemName)
+  }));
+  const rawEvents = [
+    ...player.purchaseLog.map((entry) => ({
+      itemName: entry.key,
+      time: entry.time,
+      cost: getKnownItemCost(entry.key)
+    })),
+    ...fallbackEvents
+  ];
+
+  const deduped = new Map<string, { itemName: string; time: number; cost: number | null; slug: string }>();
+
+  rawEvents
+    .filter((event) => Number.isFinite(event.time) && event.time <= second)
+    .map((event) => ({
+      ...event,
+      slug: normalizeItemSlug(event.itemName)
+    }))
+    .filter((event) => !event.slug.startsWith("recipe_"))
+    .sort((left, right) => left.time - right.time)
+    .forEach((event) => {
+      const key = `${event.slug}-${event.time}`;
+      if (!deduped.has(key)) {
+        deduped.set(key, event);
+      }
+    });
+
+  return [...deduped.values()];
+}
+
+function getRosterInventory(player: TimelinePlayer, second: number, maxSecond: number): RosterInventoryState {
+  const allEvents = buildInventoryCandidates(player, second);
+  const earlyWindowSeconds = 120;
+
+  if (second <= 0) {
+    const startingEvents = allEvents.filter((event) => event.time <= 0 && !teleportItemSlugs.has(event.slug) && !isNeutralItem(event.itemName));
+    const groupedStartingSlots = buildGroupedRosterSlots(player, startingEvents, { treatStartingStacks: true });
+    const startingSlots: Array<RosterSlot | null> = Array.from({ length: 9 }, (_, index) => {
+      const slot = groupedStartingSlots[index];
+      return slot
+        ? {
+            key: `start-${slot.slug}-${slot.firstTime}-${index}`,
+            name: slot.itemName,
+            imageUrl: slot.imageUrl,
+            ...(slot.count > 1 ? { count: slot.count } : {})
+          }
+        : null;
+    });
+
+    return {
+      inventory: startingSlots.slice(0, 6),
+      backpack: startingSlots.slice(6, 9),
+      teleport: null,
+      neutral: null
+    };
+  }
+
+  const hasFinalSlots =
+    player.finalInventory.some((item) => Boolean(item)) ||
+    player.finalBackpack.some((item) => Boolean(item)) ||
+    Boolean(player.finalNeutral);
+  const finalStateThreshold = Math.max(0, Math.floor(maxSecond) - 90);
+  if (hasFinalSlots && second >= finalStateThreshold) {
+    const finalState = buildFinalRosterInventory(player);
+    if (!finalState.teleport) {
+      const tpEvent = player.purchaseLog
+        .filter((entry) => entry.time <= second && isTeleportItem(entry.key))
+        .sort((left, right) => right.time - left.time)[0];
+      if (tpEvent) {
+        finalState.teleport = {
+          key: `tp-final-fallback-${tpEvent.time}`,
+          name: "Town Portal Scroll",
+          imageUrl: getRosterItemImage(player, tpEvent.key)
+        };
+      }
+    }
+    return finalState;
+  }
+
+  const tpEvents = allEvents.filter((event) => teleportItemSlugs.has(event.slug));
+  const neutralEvents = allEvents.filter((event) => isNeutralItem(event.itemName));
+  const durableEvents = allEvents.filter((event) => {
+    if (ignoredInventoryItemSlugs.has(event.slug)) {
+      return second <= earlyWindowSeconds && event.time <= 0;
+    }
+    if (teleportItemSlugs.has(event.slug)) return false;
+    if (isNeutralItem(event.itemName)) return false;
+    return true;
+  });
+
+  const groupedDurableSlots = buildGroupedRosterSlots(player, durableEvents);
+  const normalizedSlots: Array<RosterSlot | null> = Array.from({ length: 9 }, (_, index) => {
+    const slot = groupedDurableSlots[index];
+    return slot
+      ? {
+          key: `${slot.slug}-${slot.firstTime}-${index}`,
+          name: slot.itemName,
+          imageUrl: slot.imageUrl,
+          ...(slot.count > 1 ? { count: slot.count } : {})
+        }
+      : null;
+  });
+
+  const teleportSlot =
+    tpEvents.length > 0
+      ? {
+          key: `tpscroll-${tpEvents[tpEvents.length - 1]?.time ?? 0}`,
+          name: "Town Portal Scroll",
+          imageUrl: getRosterItemImage(player, "tpscroll"),
+          ...(tpEvents.length > 1 ? { count: tpEvents.length } : {})
+        }
+      : null;
+
+  const neutralSlot =
+    neutralEvents.length > 0
+      ? {
+          key: `${neutralEvents[neutralEvents.length - 1]?.slug ?? "neutral"}-${neutralEvents[neutralEvents.length - 1]?.time ?? 0}`,
+          name: neutralEvents[neutralEvents.length - 1]?.itemName ?? "Neutral item",
+          imageUrl: getRosterItemImage(player, neutralEvents[neutralEvents.length - 1]?.itemName ?? "Neutral item")
+        }
+      : second >= 45 * 60 && player.finalNeutral
+        ? toRosterSlot(player, player.finalNeutral, "neutral-late-fallback")
+        : null;
+
+  return {
+    inventory: normalizedSlots.slice(0, 6),
+    backpack: normalizedSlots.slice(6, 9),
+    teleport: teleportSlot,
+    neutral: neutralSlot
+  };
 }
 
 function ItemTimingTimeline({
@@ -979,9 +1488,9 @@ function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; du
     ...players.flatMap((player) => [...player.observerLog, ...player.sentryLog].map((entry) => entry.time)),
     1
   );
-  const [selectedSecond, setSelectedSecond] = useState(maxSecond);
+  const [selectedSecond, setSelectedSecond] = useState(0);
   useEffect(() => {
-    setSelectedSecond(maxSecond);
+    setSelectedSecond(0);
   }, [maxSecond]);
 
   const wardEvents = players.flatMap((player) => {
@@ -996,8 +1505,10 @@ function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; du
       ...player.sentryLog.map((entry, index) => ({ ...base, ...entry, kind: "sentry" as const, index }))
     ];
   });
-  const activeWards = wardEvents
-    .filter((entry) => entry.time <= selectedSecond)
+  const visibleWardEvents = selectedSecond === 0
+    ? wardEvents.filter((entry) => (entry.action ?? "SPAWN").toUpperCase() !== "DESPAWN")
+    : buildWardTimelineState(wardEvents, selectedSecond).active;
+  const activeWards = visibleWardEvents
     .map((entry) => ({
       ...entry,
       left: projectWardCoordinateToMinimapPercent(entry.x),
@@ -1035,9 +1546,7 @@ function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; du
             value={Math.min(selectedSecond, Math.ceil(maxSecond))}
             onChange={(event) => setSelectedSecond(Number(event.target.value))}
           />
-          <p className="muted-inline">
-            Placement view only for now. Wards appear once placed; despawn/death timing needs the next telemetry ingestion pass.
-          </p>
+          <p className="muted-inline">At 00:00 the map shows every recorded ward placement. After that, it shows wards that are still active at the selected time whenever despawn data is available.</p>
         </div>
         <div className="vision-map-board" aria-label="Dota map ward placements">
           <img className="vision-map-image" src="/api/assets/dota-map" alt="Dota 2 minimap" />
@@ -1348,12 +1857,17 @@ export function MatchPage() {
   const matchId = params.matchId ? Number(params.matchId) : null;
   const query = useMatch(Number.isFinite(matchId) ? matchId : null);
   const refreshMatch = useRefreshMatch(Number.isFinite(matchId) ? matchId : null);
+  const settingsQuery = useSettings();
+  const canManageMatchData =
+    !(settingsQuery.data?.adminPasswordConfigured ?? false) || (settingsQuery.data?.adminUnlocked ?? false);
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("gold");
   const [timelineMode, setTimelineMode] = useState<TimelineMode>("perMinute");
   const [teamTimelineTab, setTeamTimelineTab] = useState<TeamTimelineTab>("gold");
   const [teamTimelineMode, setTeamTimelineMode] = useState<TimelineMode>("perMinute");
   const [stackTeamTimelines, setStackTeamTimelines] = useState(false);
   const [stackPlayerTimelines, setStackPlayerTimelines] = useState(false);
+  const [activeMatchTab, setActiveMatchTab] = useState<MatchTab>("overview");
+  const [rosterSecond, setRosterSecond] = useState(0);
   const [teamOverlayTabs, setTeamOverlayTabs] = useState<OverlaySelection[]>([
     { tab: "gold", mode: "perMinute" },
     { tab: "xp", mode: "cumulative" },
@@ -1373,6 +1887,12 @@ export function MatchPage() {
   const radiantPlayers = query.data?.participants.filter((player) => player.isRadiant) ?? [];
   const direPlayers = query.data?.participants.filter((player) => !player.isRadiant) ?? [];
   const timelineMinutes = query.data?.timelineMinutes ?? [];
+  const rosterMaxSecond = Math.max(query.data?.durationSeconds ?? 0, (timelineMinutes[timelineMinutes.length - 1] ?? 0) * 60, 1);
+  const rosterMinuteIndex = Math.max(0, Math.round(rosterSecond / 60));
+
+  useEffect(() => {
+    setRosterSecond(rosterMaxSecond);
+  }, [matchId, rosterMaxSecond]);
   const buildTeamTimeline = (
     players: typeof radiantPlayers,
     key: "goldTimeline" | "xpTimeline" | "lastHitsTimeline" | "heroDamageTimeline" | "damageTakenTimeline"
@@ -1396,27 +1916,47 @@ export function MatchPage() {
   const direHeroDamageTimeline = buildTeamTimeline(direPlayers, "heroDamageTimeline");
   const radiantDamageTakenTimeline = buildTeamTimeline(radiantPlayers, "damageTakenTimeline");
   const direDamageTakenTimeline = buildTeamTimeline(direPlayers, "damageTakenTimeline");
-  const getTeamTimelineValues = (tab: Exclude<TeamTimelineTab, "items">) => ({
+  const radiantObserverPlacementTimeline = getWardPlacementTimeline(
+    query.data?.participants.filter((player) => player.isRadiant).flatMap((player) => player.observerLog) ?? [],
+    Math.max(0, timelineMinutes.length - 1)
+  );
+  const direObserverPlacementTimeline = getWardPlacementTimeline(
+    query.data?.participants.filter((player) => !player.isRadiant).flatMap((player) => player.observerLog) ?? [],
+    Math.max(0, timelineMinutes.length - 1)
+  );
+  const radiantObserverActiveTimeline = getActiveWardTimeline(
+    query.data?.participants.filter((player) => player.isRadiant).flatMap((player) => player.observerLog) ?? [],
+    Math.max(0, timelineMinutes.length - 1)
+  );
+  const direObserverActiveTimeline = getActiveWardTimeline(
+    query.data?.participants.filter((player) => !player.isRadiant).flatMap((player) => player.observerLog) ?? [],
+    Math.max(0, timelineMinutes.length - 1)
+  );
+  const getTeamTimelineValues = (tab: Exclude<TeamTimelineTab, "items">, mode: TimelineMode) => ({
     radiant:
       tab === "gold"
-        ? radiantGoldTimeline
+        ? (mode === "perMinute" ? perMinuteTimeline(radiantGoldTimeline) : totalTimeline(radiantGoldTimeline))
         : tab === "xp"
-          ? radiantXpTimeline
+          ? (mode === "perMinute" ? perMinuteTimeline(radiantXpTimeline) : totalTimeline(radiantXpTimeline))
           : tab === "lastHits"
-            ? radiantFarmTimeline
+            ? (mode === "perMinute" ? perMinuteTimeline(radiantFarmTimeline) : totalTimeline(radiantFarmTimeline))
             : tab === "heroDamage"
-              ? radiantHeroDamageTimeline
-              : radiantDamageTakenTimeline,
+              ? (mode === "perMinute" ? perMinuteTimeline(radiantHeroDamageTimeline) : totalTimeline(radiantHeroDamageTimeline))
+              : tab === "vision"
+                ? (mode === "perMinute" ? radiantObserverActiveTimeline : radiantObserverPlacementTimeline)
+                : (mode === "perMinute" ? perMinuteTimeline(radiantDamageTakenTimeline) : totalTimeline(radiantDamageTakenTimeline)),
     dire:
       tab === "gold"
-        ? direGoldTimeline
+        ? (mode === "perMinute" ? perMinuteTimeline(direGoldTimeline) : totalTimeline(direGoldTimeline))
         : tab === "xp"
-          ? direXpTimeline
+          ? (mode === "perMinute" ? perMinuteTimeline(direXpTimeline) : totalTimeline(direXpTimeline))
           : tab === "lastHits"
-            ? direFarmTimeline
+            ? (mode === "perMinute" ? perMinuteTimeline(direFarmTimeline) : totalTimeline(direFarmTimeline))
             : tab === "heroDamage"
-              ? direHeroDamageTimeline
-              : direDamageTakenTimeline
+              ? (mode === "perMinute" ? perMinuteTimeline(direHeroDamageTimeline) : totalTimeline(direHeroDamageTimeline))
+              : tab === "vision"
+                ? (mode === "perMinute" ? direObserverActiveTimeline : direObserverPlacementTimeline)
+                : (mode === "perMinute" ? perMinuteTimeline(direDamageTakenTimeline) : totalTimeline(direDamageTakenTimeline))
   });
   const selectTeamTimeline = (tab: OverlayTimelineTab, mode: TimelineMode) => {
     setTeamTimelineTab(tab);
@@ -1455,11 +1995,11 @@ export function MatchPage() {
     <Page
       title={`Match ${params.matchId ?? ""}`}
       subtitle="Detailed match inspection sourced from cache when possible and OpenDota when needed."
-      aside={
-        matchId ? (
-          <button
-            type="button"
-            onClick={() => refreshMatch.mutate()}
+        aside={
+          matchId && canManageMatchData ? (
+            <button
+              type="button"
+              onClick={() => refreshMatch.mutate()}
             disabled={refreshMatch.isPending}
             title="Force a fresh OpenDota fetch and STRATZ telemetry enrichment for this match"
           >
@@ -1474,6 +2014,25 @@ export function MatchPage() {
       {refreshMatch.isSuccess ? <p className="success-inline">Match data refreshed.</p> : null}
       {query.data ? (
         <>
+          <div className="settings-tabs" role="tablist" aria-label="Match sections">
+            {[
+              ["overview", "Overview"],
+              ["vision", "Vision"],
+              ["timelines", "Timelines"],
+              ["rosters", "Rosters"]
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`settings-tab ${activeMatchTab === key ? "active" : ""}`}
+                onClick={() => setActiveMatchTab(key as MatchTab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className={activeMatchTab === "overview" ? "tab-panel" : "tab-panel hidden"}>
           <MetricGrid
             items={[
               {
@@ -1628,9 +2187,13 @@ export function MatchPage() {
               </div>
             </details>
           </Card>
+          </div>
 
+          <div className={activeMatchTab === "vision" ? "tab-panel" : "tab-panel hidden"}>
           <VisionMap players={query.data.participants} durationSeconds={query.data.durationSeconds} />
+          </div>
 
+          <div className={activeMatchTab === "timelines" ? "tab-panel" : "tab-panel hidden"}>
           <div className="timeline-section-stack">
             <Card
               title="Team timelines"
@@ -1742,10 +2305,17 @@ export function MatchPage() {
                 />
               ) : (
                 <TeamTimelinePanel
-                  radiantValues={getTeamTimelineValues(teamTimelineTab).radiant}
-                  direValues={getTeamTimelineValues(teamTimelineTab).dire}
+                  radiantValues={getTeamTimelineValues(teamTimelineTab, teamTimelineMode).radiant}
+                  direValues={getTeamTimelineValues(teamTimelineTab, teamTimelineMode).dire}
                   timelineMinutes={timelineMinutes}
                   selectedMode={teamTimelineMode}
+                  title={
+                    teamTimelineTab === "vision"
+                      ? teamTimelineMode === "perMinute"
+                        ? "Active observer wards"
+                        : "Cumulative observer wards placed"
+                      : undefined
+                  }
                 />
               )}
             </Card>
@@ -1869,11 +2439,39 @@ export function MatchPage() {
                       current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key]
                     )
                   }
+                  title={
+                    timelineTab === "vision"
+                      ? timelineMode === "perMinute"
+                        ? "Observer wards placed"
+                        : "Cumulative observer wards placed"
+                      : undefined
+                  }
                 />
               )}
             </Card>
           </div>
+          </div>
 
+          <div className={activeMatchTab === "rosters" ? "tab-panel" : "tab-panel hidden"}>
+          <div className="roster-timeline-sticky">
+            <Card
+              title="Roster timeline"
+              extra={<span className="muted-inline">{formatDuration(rosterSecond)}</span>}
+            >
+              <div className="vision-map-controls">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.ceil(rosterMaxSecond)}
+                  value={Math.min(rosterSecond, Math.ceil(rosterMaxSecond))}
+                  onChange={(event) => setRosterSecond(Number(event.target.value))}
+                />
+                <p className="muted-inline">
+                  Timeline-backed roster stats update with the slider. Inventory, vision placements, and purchased utility now follow the selected time.
+                </p>
+              </div>
+            </Card>
+          </div>
           <div className="two-column">
             {[
               {
@@ -1892,6 +2490,20 @@ export function MatchPage() {
               <Card key={section.title} title={section.title}>
                 <div className="roster-list">
                   {section.players.map((player, index) => {
+                    const goldAtTime = getTimelineValueAt(totalTimeline(player.goldTimeline), rosterMinuteIndex);
+                    const xpAtTime = getTimelineValueAt(totalTimeline(player.xpTimeline), rosterMinuteIndex);
+                    const lastHitsAtTime = getTimelineValueAt(totalTimeline(player.lastHitsTimeline), rosterMinuteIndex);
+                    const deniesAtTime = getTimelineValueAt(totalTimeline(player.deniesTimeline), rosterMinuteIndex);
+                    const heroDamageAtTime = getTimelineValueAt(totalTimeline(player.heroDamageTimeline), rosterMinuteIndex);
+                    const damageTakenAtTime = getTimelineValueAt(totalTimeline(player.damageTakenTimeline), rosterMinuteIndex);
+                    const levelAtTime = getLevelFromXp(xpAtTime);
+                    const gpmAtTime = getTimelineValueAt(perMinuteTimeline(player.goldTimeline), rosterMinuteIndex);
+                    const xpmAtTime = getTimelineValueAt(perMinuteTimeline(player.xpTimeline), rosterMinuteIndex);
+                    const rosterInventory = getRosterInventory(player, rosterSecond, rosterMaxSecond);
+                    const observerPlacementsAtTime = getTimelineWardPlacementCount(player.observerLog, rosterSecond);
+                    const sentryPlacementsAtTime = getTimelineWardPlacementCount(player.sentryLog, rosterSecond);
+                    const smokePurchasesAtTime = getTimelinePurchaseCount(player, "smoke", rosterSecond);
+                    const wardEfficiencyAtTime = getWardEfficiencyPercent(player.observerLog, rosterSecond, 360);
                     const killParticipation =
                       section.teamKills > 0 ? (((player.kills ?? 0) + (player.assists ?? 0)) / section.teamKills) * 100 : 0;
                     return (
@@ -1929,45 +2541,106 @@ export function MatchPage() {
                           </div>
                           <div>
                             <span className="eyebrow">Net worth</span>
-                            <strong>{formatNumber(player.netWorth)}</strong>
+                            <strong>{formatNumber(goldAtTime ?? player.netWorth)}</strong>
                           </div>
                           <div>
                             <span className="eyebrow">Farm</span>
                             <strong>
-                              {formatNumber(player.gpm)} GPM / {formatNumber(player.xpm)} XPM
+                              {formatNumber(gpmAtTime ?? player.gpm)} GPM / {formatNumber(xpmAtTime ?? player.xpm)} XPM
                             </strong>
                           </div>
                           <div>
                             <span className="eyebrow">Damage</span>
                             <strong>
-                              {formatNumber(player.heroDamage)} hero / {formatNumber(player.towerDamage)} tower
+                              {formatNumber(heroDamageAtTime ?? player.heroDamage)} hero / {formatNumber(damageTakenAtTime)} taken
                             </strong>
                           </div>
                           <div>
                             <span className="eyebrow">CS</span>
                             <strong>
-                              {formatNumber(player.lastHits)} LH / {formatNumber(player.denies)} DN
+                              {formatNumber(lastHitsAtTime ?? player.lastHits)} LH / {formatNumber(deniesAtTime ?? player.denies)} DN
                             </strong>
                           </div>
                           <div>
                             <span className="eyebrow">Level</span>
-                            <strong>{formatNumber(player.level)}</strong>
+                            <strong>{formatNumber(levelAtTime ?? player.level)}</strong>
                           </div>
                         </div>
 
                         <div className="player-build">
-                          <span className="eyebrow">Build</span>
-                          {player.items.length === 0 ? (
-                            <p className="muted-inline">No tracked items for this player.</p>
-                          ) : (
-                            <div className="item-icon-strip">
-                              {player.items.map((item) => (
-                                <span key={`${item.name}-${item.imageUrl ?? "none"}`} className="item-slot" title={item.name}>
-                                  <IconImage src={item.imageUrl} alt={item.name} size="sm" rounded={false} />
-                                </span>
-                              ))}
+                          <span className="eyebrow">Inventory</span>
+                            <div className="inventory-panel">
+                            <div className="inventory-top-row">
+                            <div className="inventory-grid">
+                                {rosterInventory.inventory.map((item, slotIndex) => (
+                                  <span
+                                    key={item?.key ?? `inventory-${slotIndex}`}
+                                    className={`item-slot inventory${item ? "" : " empty"}`}
+                                    title={item?.name ?? `Inventory slot ${slotIndex + 1}`}
+                                  >
+                                    {item ? <IconImage src={item.imageUrl} alt={item.name} size="sm" rounded={false} /> : null}
+                                    {item?.count && item.count > 1 ? <span className="item-slot-count">{item.count}</span> : null}
+                                  </span>
+                                ))}
                             </div>
-                          )}
+                            <span
+                              className={`item-slot utility neutral-inline${rosterInventory.neutral ? "" : " empty"}`}
+                              title={rosterInventory.neutral?.name ?? "Neutral item slot"}
+                            >
+                              {rosterInventory.neutral ? (
+                                <IconImage
+                                  src={rosterInventory.neutral.imageUrl}
+                                  alt={rosterInventory.neutral.name}
+                                  size="sm"
+                                  rounded={false}
+                                />
+                              ) : null}
+                              {rosterInventory.neutral?.count && rosterInventory.neutral.count > 1 ? (
+                                <span className="item-slot-count">{rosterInventory.neutral.count}</span>
+                              ) : null}
+                            </span>
+                            </div>
+                            <div className="inventory-meta-row">
+                              <span className="eyebrow">Backpack</span>
+                              <div className="backpack-grid">
+                                {rosterInventory.backpack.map((item, slotIndex) => (
+                                  <span
+                                    key={item?.key ?? `backpack-${slotIndex}`}
+                                    className={`item-slot backpack${item ? "" : " empty"}`}
+                                    title={item?.name ?? `Backpack slot ${slotIndex + 1}`}
+                                  >
+                                    {item ? <IconImage src={item.imageUrl} alt={item.name} size="sm" rounded={false} /> : null}
+                                    {item?.count && item.count > 1 ? <span className="item-slot-count">{item.count}</span> : null}
+                                  </span>
+                                ))}
+                              </div>
+                              <span
+                                className={`item-slot utility tp-slot${rosterInventory.teleport ? "" : " empty"}`}
+                                title={rosterInventory.teleport?.name ?? "Teleport scroll slot"}
+                              >
+                                {rosterInventory.teleport ? (
+                                  <IconImage
+                                    src={rosterInventory.teleport.imageUrl}
+                                    alt={rosterInventory.teleport.name}
+                                    size="sm"
+                                    rounded={false}
+                                  />
+                                ) : (
+                                  <span className="slot-placeholder-icon">
+                                    <IconImage
+                                      src={getItemImageUrl("tpscroll")}
+                                      alt="Teleport scroll slot"
+                                      size="sm"
+                                      rounded={false}
+                                    />
+                                  </span>
+                                )}
+                                  {rosterInventory.teleport?.count && rosterInventory.teleport.count > 1 ? (
+                                    <span className="item-slot-count">{rosterInventory.teleport.count}</span>
+                                  ) : null}
+                                </span>
+                              </div>
+                          </div>
                         </div>
 
                         <div className="player-build">
@@ -1975,18 +2648,22 @@ export function MatchPage() {
                           <div className="player-metrics">
                             <div>
                               <span className="eyebrow">Observers</span>
-                              <strong>{formatNumber(player.observerWardsPlaced)}</strong>
+                              <strong>{formatNumber(observerPlacementsAtTime)}</strong>
                             </div>
                             <div>
                               <span className="eyebrow">Sentries</span>
-                              <strong>{formatNumber(player.sentryWardsPlaced)}</strong>
+                              <strong>{formatNumber(sentryPlacementsAtTime)}</strong>
                             </div>
                             <div>
                               <span className="eyebrow">Smokes</span>
                               <strong>
                                 {formatNumber(getSmokeUseCount(player))}
-                                <span className="muted-inline"> used / {formatNumber(getSmokePurchaseCount(player))} bought</span>
+                                <span className="muted-inline"> used / {formatNumber(smokePurchasesAtTime)} bought</span>
                               </strong>
+                            </div>
+                            <div>
+                              <span className="eyebrow">Ward efficiency</span>
+                              <strong>{wardEfficiencyAtTime === null ? "No data" : formatPercent(wardEfficiencyAtTime)}</strong>
                             </div>
                           </div>
                         </div>
@@ -1996,6 +2673,7 @@ export function MatchPage() {
                 </div>
               </Card>
             ))}
+          </div>
           </div>
         </>
       ) : null}

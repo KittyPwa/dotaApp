@@ -9,13 +9,14 @@ import { Page } from "../components/Page";
 import { EmptyState, ErrorState, LoadingState } from "../components/State";
 import { TableCard } from "../components/TableCard";
 import { usePagination } from "../hooks/usePagination";
-import { useLeague, useSyncLeague } from "../hooks/useQueries";
+import { useLeague, useSettings, useSyncLeague } from "../hooks/useQueries";
 import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
 type MatchSortKey = "match" | "start" | "duration" | "outcome" | "score" | "patch" | "parsedData";
 type HeroSortKey = "hero" | "games" | "wins" | "losses" | "winrate" | "players";
 type PlayerSortKey = "player" | "games" | "wins" | "losses" | "winrate" | "heroes";
 type ItemSortKey = "item" | "games" | "wins" | "losses" | "winrate";
+type LeagueTab = "heroes" | "players" | "items" | "matches";
 
 function ParsedDataPill({ label }: { label: string }) {
   return <span className={`parsed-data-pill ${label === "Full" ? "rich" : "basic"}`}>{label}</span>;
@@ -26,6 +27,9 @@ export function LeagueDetailPage() {
   const leagueId = params.leagueId ? Number(params.leagueId) : null;
   const query = useLeague(Number.isFinite(leagueId) ? leagueId : null);
   const syncLeague = useSyncLeague(Number.isFinite(leagueId) ? leagueId : null);
+  const settingsQuery = useSettings();
+  const canManageLeagueSync =
+    !(settingsQuery.data?.adminPasswordConfigured ?? false) || (settingsQuery.data?.adminUnlocked ?? false);
   const [syncLimit, setSyncLimit] = useState("25");
   const [matchSort, setMatchSort] = useState<{ key: MatchSortKey; direction: "asc" | "desc" }>({
     key: "start",
@@ -45,6 +49,11 @@ export function LeagueDetailPage() {
   });
   const [selectedHeroId, setSelectedHeroId] = useState<number | null>(null);
   const [showSparseItems, setShowSparseItems] = useState(false);
+  const [activeTab, setActiveTab] = useState<LeagueTab>("matches");
+  const [heroSearch, setHeroSearch] = useState("");
+  const [playerSearch, setPlayerSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
+  const [matchSearch, setMatchSearch] = useState("");
 
   function toggleSort<T extends string>(key: T, setter: Dispatch<SetStateAction<{ key: T; direction: "asc" | "desc" }>>) {
     setter((current) => ({
@@ -54,7 +63,10 @@ export function LeagueDetailPage() {
   }
 
   const sortedHeroes = useMemo(() => {
-    const rows = [...(query.data?.heroes ?? [])];
+    const needle = heroSearch.trim().toLowerCase();
+    const rows = [...(query.data?.heroes ?? [])].filter((hero) =>
+      !needle ? true : hero.heroName.toLowerCase().includes(needle)
+    );
     rows.sort((left, right) => {
       let compare = 0;
       switch (heroSort.key) {
@@ -81,10 +93,13 @@ export function LeagueDetailPage() {
       return heroSort.direction === "asc" ? compare : -compare;
     });
     return rows;
-  }, [heroSort, query.data?.heroes]);
+  }, [heroSearch, heroSort, query.data?.heroes]);
 
   const sortedPlayers = useMemo(() => {
-    const rows = [...(query.data?.players ?? [])];
+    const needle = playerSearch.trim().toLowerCase();
+    const rows = [...(query.data?.players ?? [])].filter((player) =>
+      !needle ? true : (player.personaname ?? `Player ${player.playerId ?? "Anonymous"}`).toLowerCase().includes(needle)
+    );
     rows.sort((left, right) => {
       let compare = 0;
       switch (playerSort.key) {
@@ -113,10 +128,13 @@ export function LeagueDetailPage() {
       return playerSort.direction === "asc" ? compare : -compare;
     });
     return rows;
-  }, [playerSort, query.data?.players]);
+  }, [playerSearch, playerSort, query.data?.players]);
 
   const sortedItems = useMemo(() => {
-    const rows = [...(query.data?.items ?? [])].filter((item) => showSparseItems || item.games >= 10);
+    const needle = itemSearch.trim().toLowerCase();
+    const rows = [...(query.data?.items ?? [])].filter(
+      (item) => (showSparseItems || item.games >= 10) && (!needle || item.itemName.toLowerCase().includes(needle))
+    );
     rows.sort((left, right) => {
       let compare = 0;
       switch (itemSort.key) {
@@ -140,7 +158,7 @@ export function LeagueDetailPage() {
       return itemSort.direction === "asc" ? compare : -compare;
     });
     return rows;
-  }, [itemSort, query.data?.items, showSparseItems]);
+  }, [itemSearch, itemSort, query.data?.items, showSparseItems]);
 
   const selectedHero = useMemo(
     () => query.data?.heroes.find((hero) => hero.heroId === selectedHeroId) ?? null,
@@ -186,13 +204,26 @@ export function LeagueDetailPage() {
 
   const selectedHeroPlayers = useMemo(() => {
     const sourceRows = query.data?.heroPlayers?.length ? query.data.heroPlayers : derivedHeroPlayers;
-    const rows = [...sourceRows].filter((player) => player.heroId === selectedHeroId);
+    const needle = playerSearch.trim().toLowerCase();
+    const rows = [...sourceRows].filter(
+      (player) =>
+        player.heroId === selectedHeroId &&
+        (!needle || (player.personaname ?? `Player ${player.playerId ?? "Anonymous"}`).toLowerCase().includes(needle))
+    );
     rows.sort((left, right) => right.games - left.games || right.winrate - left.winrate);
     return rows;
-  }, [derivedHeroPlayers, query.data?.heroPlayers, selectedHeroId]);
+  }, [derivedHeroPlayers, playerSearch, query.data?.heroPlayers, selectedHeroId]);
 
   const sortedMatches = useMemo(() => {
-    const rows = [...(query.data?.matches ?? [])];
+    const needle = matchSearch.trim().toLowerCase();
+    const rows = [...(query.data?.matches ?? [])].filter((match) => {
+      if (!needle) return true;
+      return (
+        String(match.matchId).includes(needle) ||
+        (match.league ?? "").toLowerCase().includes(needle) ||
+        (match.patch ?? "").toLowerCase().includes(needle)
+      );
+    });
     rows.sort((left, right) => {
       let compare = 0;
       switch (matchSort.key) {
@@ -222,7 +253,7 @@ export function LeagueDetailPage() {
       return matchSort.direction === "asc" ? compare : -compare;
     });
     return rows;
-  }, [matchSort, query.data?.matches]);
+  }, [matchSearch, matchSort, query.data?.matches]);
 
   const matchPagination = usePagination(sortedMatches.length, 20, [20, 50, 100]);
   const pagedMatches = matchPagination.paged(sortedMatches);
@@ -252,13 +283,15 @@ export function LeagueDetailPage() {
                 onChange={(event) => setSyncLimit(event.target.value)}
               />
             </label>
-            <button
-              type="button"
-              disabled={syncLeague.isPending}
-              onClick={() => syncLeague.mutate(Math.min(100, Math.max(1, Number(syncLimit) || 25)))}
-            >
-              {syncLeague.isPending ? "Syncing..." : "Sync league matches"}
-            </button>
+            {canManageLeagueSync ? (
+              <button
+                type="button"
+                disabled={syncLeague.isPending}
+                onClick={() => syncLeague.mutate(Math.min(100, Math.max(1, Number(syncLimit) || 25)))}
+              >
+                {syncLeague.isPending ? "Syncing..." : "Sync league matches"}
+              </button>
+            ) : null}
           </div>
         ) : null
       }
@@ -299,7 +332,27 @@ export function LeagueDetailPage() {
             ]}
           />
 
+          <div className="settings-tabs" role="tablist" aria-label="League sections">
+            {[
+              ["matches", "Matches"],
+              ["heroes", "Heroes"],
+              ["players", "Players"],
+              ["items", "Items"]
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`settings-tab ${activeTab === key ? "active" : ""}`}
+                onClick={() => setActiveTab(key as LeagueTab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "heroes" || activeTab === "players" ? (
           <div className="two-column">
+            {activeTab === "heroes" ? (
             <TableCard
               title="Heroes"
               rowCount={pagedHeroes.length}
@@ -311,6 +364,22 @@ export function LeagueDetailPage() {
               onPreviousPage={heroPagination.previousPage}
               onNextPage={heroPagination.nextPage}
               onPageSizeChange={heroPagination.setPageSize}
+              extra={
+                <div className="table-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={heroSearch}
+                      onChange={(event) => {
+                        setHeroSearch(event.target.value);
+                        heroPagination.resetPage();
+                      }}
+                      placeholder="Hero"
+                    />
+                  </label>
+                </div>
+              }
               empty={<EmptyState label="No hero data stored for this league." />}
             >
               <DataTable
@@ -347,7 +416,9 @@ export function LeagueDetailPage() {
                 ]}
               />
             </TableCard>
+            ) : null}
 
+            {activeTab === "players" ? (
             <TableCard
               title="Players"
               rowCount={pagedPlayers.length}
@@ -359,6 +430,23 @@ export function LeagueDetailPage() {
               onPreviousPage={playerPagination.previousPage}
               onNextPage={playerPagination.nextPage}
               onPageSizeChange={playerPagination.setPageSize}
+              extra={
+                <div className="table-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={playerSearch}
+                      onChange={(event) => {
+                        setPlayerSearch(event.target.value);
+                        playerPagination.resetPage();
+                        heroPlayerPagination.resetPage();
+                      }}
+                      placeholder="Player"
+                    />
+                  </label>
+                </div>
+              }
               empty={<EmptyState label="No player data stored for this league." />}
             >
               <DataTable
@@ -373,7 +461,7 @@ export function LeagueDetailPage() {
                     sortable: true,
                     cell: (player) =>
                       player.playerId ? (
-                        <Link to={`/players/${player.playerId}`}>{player.personaname ?? player.playerId}</Link>
+                        <Link to={`/players/${player.playerId}?leagueId=${leagueId}`}>{player.personaname ?? player.playerId}</Link>
                       ) : (
                         player.personaname ?? "Anonymous"
                       )
@@ -386,9 +474,11 @@ export function LeagueDetailPage() {
                 ]}
               />
             </TableCard>
+            ) : null}
           </div>
+          ) : null}
 
-          {selectedHero ? (
+          {activeTab === "heroes" && selectedHero ? (
             <TableCard
               title={`Players on ${selectedHero.heroName}`}
               rowCount={pagedHeroPlayers.length}
@@ -401,9 +491,23 @@ export function LeagueDetailPage() {
               onNextPage={heroPlayerPagination.nextPage}
               onPageSizeChange={heroPlayerPagination.setPageSize}
               extra={
-                <button type="button" onClick={() => setSelectedHeroId(null)}>
-                  Clear
-                </button>
+                <div className="table-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={playerSearch}
+                      onChange={(event) => {
+                        setPlayerSearch(event.target.value);
+                        heroPlayerPagination.resetPage();
+                      }}
+                      placeholder="Player"
+                    />
+                  </label>
+                  <button type="button" onClick={() => setSelectedHeroId(null)}>
+                    Clear
+                  </button>
+                </div>
               }
               empty={<EmptyState label="No player data stored for this hero in this league." />}
             >
@@ -416,7 +520,7 @@ export function LeagueDetailPage() {
                     header: "Player",
                     cell: (player) =>
                       player.playerId ? (
-                        <Link to={`/players/${player.playerId}`}>{player.personaname ?? player.playerId}</Link>
+                        <Link to={`/players/${player.playerId}?leagueId=${leagueId}`}>{player.personaname ?? player.playerId}</Link>
                       ) : (
                         player.personaname ?? "Anonymous"
                       )
@@ -430,6 +534,7 @@ export function LeagueDetailPage() {
             </TableCard>
           ) : null}
 
+          {activeTab === "items" ? (
           <TableCard
             title="Items over 1500 gold"
             rowCount={pagedItems.length}
@@ -442,11 +547,25 @@ export function LeagueDetailPage() {
             onNextPage={itemPagination.nextPage}
             onPageSizeChange={itemPagination.setPageSize}
             extra={
-              sparseItemCount > 0 ? (
-                <button type="button" onClick={() => setShowSparseItems((current) => !current)}>
-                  {showSparseItems ? "Hide <10 games" : `Show ${formatNumber(sparseItemCount)} rare items`}
-                </button>
-              ) : null
+              <div className="table-controls">
+                <label>
+                  Search
+                  <input
+                    type="search"
+                    value={itemSearch}
+                    onChange={(event) => {
+                      setItemSearch(event.target.value);
+                      itemPagination.resetPage();
+                    }}
+                    placeholder="Item"
+                  />
+                </label>
+                {sparseItemCount > 0 ? (
+                  <button type="button" onClick={() => setShowSparseItems((current) => !current)}>
+                    {showSparseItems ? "Hide <10 games" : `Show ${formatNumber(sparseItemCount)} rare items`}
+                  </button>
+                ) : null}
+              </div>
             }
             empty={<EmptyState label="No qualifying item data stored for this league." />}
           >
@@ -474,7 +593,9 @@ export function LeagueDetailPage() {
               ]}
             />
           </TableCard>
+          ) : null}
 
+          {activeTab === "matches" ? (
           <TableCard
             title="League matches"
             rowCount={pagedMatches.length}
@@ -486,6 +607,22 @@ export function LeagueDetailPage() {
             onPreviousPage={matchPagination.previousPage}
             onNextPage={matchPagination.nextPage}
             onPageSizeChange={matchPagination.setPageSize}
+            extra={
+              <div className="table-controls">
+                <label>
+                  Search
+                  <input
+                    type="search"
+                    value={matchSearch}
+                    onChange={(event) => {
+                      setMatchSearch(event.target.value);
+                      matchPagination.resetPage();
+                    }}
+                    placeholder="Match, patch, league"
+                  />
+                </label>
+              </div>
+            }
             empty={<EmptyState label="No locally stored matches found for this league." />}
           >
             <DataTable
@@ -536,6 +673,7 @@ export function LeagueDetailPage() {
               ]}
             />
           </TableCard>
+          ) : null}
         </>
       ) : null}
     </Page>

@@ -21,10 +21,7 @@ export function HomePage() {
   };
 
   return (
-    <Page
-      title="Home"
-      subtitle="Fetch public Dota 2 data on demand, cache it locally, and inspect analytics from your own dataset."
-    >
+    <Page title="Lookup">
       <div className="home-grid">
         <Card title="Player lookup">
           <form className="stack" onSubmit={submitPlayer}>
@@ -44,21 +41,6 @@ export function HomePage() {
             </label>
             <button type="submit">Open match</button>
           </form>
-        </Card>
-
-        <Card title="Explore local analytics">
-          <div className="stack">
-            <p>Browse hero-level stats computed only from matches you have fetched and stored locally.</p>
-            <button type="button" onClick={() => navigate("/heroes")}>
-              Hero stats
-            </button>
-            <button type="button" onClick={() => navigate("/dashboard")}>
-              Dashboard
-            </button>
-            <button type="button" onClick={() => navigate("/settings")}>
-              Settings
-            </button>
-          </div>
         </Card>
       </div>
     </Page>

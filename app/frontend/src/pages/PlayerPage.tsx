@@ -1,18 +1,29 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { IconImage } from "../components/IconImage";
 import { MetricGrid } from "../components/MetricGrid";
 import { Page } from "../components/Page";
+import { StatsRadarChart } from "../components/StatsRadarChart";
 import { EmptyState, ErrorState, LoadingState } from "../components/State";
 import { TableCard } from "../components/TableCard";
 import { usePagination } from "../hooks/usePagination";
-import { usePlayer, useSaveSettings, useSettings, useSyncPlayerHistory } from "../hooks/useQueries";
+import { usePlayer, useSettings, useSyncPlayerHistory } from "../hooks/useQueries";
+import {
+  apiPost,
+  getLocalPrimaryPlayerIdOverride,
+  setLocalPrimaryPlayerIdOverride,
+  setLocalAutoRefreshPlayerIdsOverride,
+  setLocalFavoritePlayerIdsOverride
+} from "../api/client";
 import { formatDate, formatDuration } from "../lib/format";
 
 type SortKey = "startTime" | "durationSeconds" | "heroName" | "kda" | "result" | "parsedData";
 type ResultFilter = "all" | "wins" | "losses";
+type PlayerTab = "overview" | "heroes" | "teammates" | "matches";
+type QueueFilter = "all" | "ranked" | "unranked" | "turbo";
 
 function calculateKda(kills: number | null, deaths: number | null, assists: number | null) {
   const total = (kills ?? 0) + (assists ?? 0);
@@ -36,32 +47,88 @@ function formatRank(rankTier: number | null, leaderboardRank: number | null) {
 }
 
 export function PlayerPage() {
+  const queryClient = useQueryClient();
   const params = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const playerId = params.playerId ? Number(params.playerId) : null;
-  const query = usePlayer(Number.isFinite(playerId) ? playerId : null);
+  const [leagueFilter, setLeagueFilter] = useState(searchParams.get("leagueId") ?? "all");
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>((searchParams.get("queue") as QueueFilter) ?? "all");
+  const [heroFilter, setHeroFilter] = useState(searchParams.get("heroId") ?? "all");
+  const query = usePlayer(Number.isFinite(playerId) ? playerId : null, {
+    leagueId: leagueFilter !== "all" ? Number(leagueFilter) : null,
+    queue: queueFilter,
+    heroId: heroFilter !== "all" ? Number(heroFilter) : null
+  });
   const settingsQuery = useSettings();
-  const saveSettings = useSaveSettings();
   const syncHistory = useSyncPlayerHistory(Number.isFinite(playerId) ? playerId : null);
   const favoritePlayerIds = settingsQuery.data?.favoritePlayerIds ?? [];
   const autoRefreshPlayerIds = settingsQuery.data?.autoRefreshPlayerIds ?? [];
+  const currentPrimaryPlayerId = settingsQuery.data?.primaryPlayerId ?? null;
   const isFavorite = playerId !== null && favoritePlayerIds.includes(playerId);
   const autoRefreshEnabled = playerId !== null && autoRefreshPlayerIds.includes(playerId);
+  const isYourPlayer = playerId !== null && currentPrimaryPlayerId === playerId;
+  const canManagePlayerPreferences = true;
+  const canManagePlayerAdminActions =
+    !(settingsQuery.data?.adminPasswordConfigured ?? false) || (settingsQuery.data?.adminUnlocked ?? false);
 
   const [sortKey, setSortKey] = useState<SortKey>("startTime");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
+  const [heroSearch, setHeroSearch] = useState("");
+  const [matchSearch, setMatchSearch] = useState("");
+  const [activeTab, setActiveTab] = useState<PlayerTab>(
+    (searchParams.get("tab") as PlayerTab | null) ?? (searchParams.get("leagueId") || searchParams.get("heroId") ? "matches" : "overview")
+  );
 
-  const toggleFavorite = () => {
-    if (!settingsQuery.data || playerId === null) return;
+  useEffect(() => {
+    const queryLeagueId = searchParams.get("leagueId");
+    const queryQueue = (searchParams.get("queue") as QueueFilter | null) ?? "all";
+    const queryHeroId = searchParams.get("heroId");
+    const queryTab = searchParams.get("tab") as PlayerTab | null;
+    setLeagueFilter(queryLeagueId ?? "all");
+    setQueueFilter(queryQueue);
+    setHeroFilter(queryHeroId ?? "all");
+    if (queryTab) {
+      setActiveTab(queryTab);
+    } else if (queryLeagueId || queryHeroId) {
+      setActiveTab("matches");
+    }
+  }, [searchParams]);
+
+  const toggleFavorite = async () => {
+    if (!settingsQuery.data || playerId === null || currentPrimaryPlayerId === null) return;
 
     const nextFavoriteIds = isFavorite
       ? favoritePlayerIds.filter((id) => id !== playerId)
       : [...favoritePlayerIds, playerId].filter((value, index, list) => list.indexOf(value) === index);
+    try {
+      await apiPost("/api/player-preferences/favorites", {
+        ownerPlayerId: currentPrimaryPlayerId,
+        favoritePlayerIds: nextFavoriteIds
+      });
+      setLocalFavoritePlayerIdsOverride([]);
+      await settingsQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["player-compare"] });
+      await queryClient.invalidateQueries({ queryKey: ["community"] });
+    } catch {
+      // Let the shared error surface handle future improvements; keep UI stable for now.
+    }
+  };
 
-    saveSettings.mutate({
-      ...settingsQuery.data,
-      favoritePlayerIds: nextFavoriteIds
-    });
+  const setAsYourPlayer = () => {
+    if (playerId === null) return;
+    setLocalPrimaryPlayerIdOverride(playerId);
+    void settingsQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    void queryClient.invalidateQueries({ queryKey: ["player-compare"] });
+  };
+
+  const clearAsYourPlayer = () => {
+    setLocalPrimaryPlayerIdOverride(null);
+    void settingsQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    void queryClient.invalidateQueries({ queryKey: ["player-compare"] });
   };
 
   const toggleAutoRefresh = () => {
@@ -70,22 +137,30 @@ export function PlayerPage() {
     const nextAutoRefreshIds = autoRefreshEnabled
       ? autoRefreshPlayerIds.filter((id) => id !== playerId)
       : [...autoRefreshPlayerIds, playerId].filter((value, index, list) => list.indexOf(value) === index);
-
-    saveSettings.mutate({
-      ...settingsQuery.data,
-      autoRefreshPlayerIds: nextAutoRefreshIds
-    });
+    setLocalAutoRefreshPlayerIdsOverride(nextAutoRefreshIds);
+    void settingsQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   };
 
   const playerData = query.data;
+  const playerLeagues = playerData?.availableLeagues ?? [];
   const filteredMatches =
     playerData?.matches.filter((match) => {
-      if (resultFilter === "wins") return match.win === true;
-      if (resultFilter === "losses") return match.win === false;
-      return true;
+      return resultFilter === "wins" ? match.win === true : resultFilter === "losses" ? match.win === false : true;
     }) ?? [];
 
-  const sortedMatches = [...filteredMatches].sort((left, right) => {
+  const searchedMatches = filteredMatches.filter((match) => {
+    const needle = matchSearch.trim().toLowerCase();
+    if (!needle) return true;
+    return (
+      String(match.matchId).includes(needle) ||
+      (match.heroName ?? "").toLowerCase().includes(needle) ||
+      (match.leagueName ?? "").toLowerCase().includes(needle) ||
+      match.gameModeLabel.toLowerCase().includes(needle)
+    );
+  });
+
+  const sortedMatches = [...searchedMatches].sort((left, right) => {
     let compare = 0;
 
     switch (sortKey) {
@@ -116,8 +191,13 @@ export function PlayerPage() {
 
   const pagination = usePagination(sortedMatches.length, 20, [20, 50, 100]);
   const pagedMatches = pagination.paged(sortedMatches);
-  const heroUsagePagination = usePagination(playerData?.heroUsage.length ?? 0, 12, [12, 24, 50, 100]);
-  const pagedHeroUsage = heroUsagePagination.paged(playerData?.heroUsage ?? []);
+  const filteredHeroUsage =
+    playerData?.heroUsage.filter((hero) => {
+      const needle = heroSearch.trim().toLowerCase();
+      return !needle || hero.heroName.toLowerCase().includes(needle);
+    }) ?? [];
+  const heroUsagePagination = usePagination(filteredHeroUsage.length, 12, [12, 24, 50, 100]);
+  const pagedHeroUsage = heroUsagePagination.paged(filteredHeroUsage);
 
   const activityMap = new Map<string, { wins: number; losses: number; total: number }>();
   for (const match of playerData?.matches ?? []) {
@@ -146,24 +226,40 @@ export function PlayerPage() {
     setSortDirection(nextKey === "heroName" ? "asc" : "desc");
   };
 
+  const updateScopeFilters = (next: { leagueId?: string; queue?: QueueFilter; heroId?: string; tab?: PlayerTab | null }) => {
+    const nextLeague = next.leagueId ?? leagueFilter;
+    const nextQueue = next.queue ?? queueFilter;
+    const nextHero = next.heroId ?? heroFilter;
+    const params = new URLSearchParams();
+    if (nextLeague !== "all") params.set("leagueId", nextLeague);
+    if (nextQueue !== "all") params.set("queue", nextQueue);
+    if (nextHero !== "all") params.set("heroId", nextHero);
+    if (next.tab) params.set("tab", next.tab);
+    setSearchParams(params);
+  };
+
   return (
     <Page
-      title={`Player ${params.playerId ?? ""}`}
-      subtitle="Profile, recent matches, teammates, and local history insights."
-      aside={
-        playerData && playerId !== null ? (
-          <div className="action-group">
-            <button type="button" onClick={toggleFavorite} disabled={saveSettings.isPending || settingsQuery.isLoading}>
-              {saveSettings.isPending ? "Saving..." : isFavorite ? "Remove favorite" : "Add to favorites"}
-            </button>
-            <button type="button" onClick={toggleAutoRefresh} disabled={saveSettings.isPending || settingsQuery.isLoading}>
-              {saveSettings.isPending ? "Saving..." : autoRefreshEnabled ? "Stop refresh on open" : "Refresh on open"}
-            </button>
-            <button type="button" onClick={() => syncHistory.mutate()} disabled={syncHistory.isPending}>
-              {syncHistory.isPending ? "Syncing..." : "Sync more history"}
-            </button>
-          </div>
-        ) : null
+      title={
+        playerData ? (
+          <span className="page-title-with-icon">
+            {playerData.avatar ? (
+              <img className="avatar avatar-sm" src={playerData.avatar} alt={playerData.personaname ?? String(playerData.playerId)} />
+            ) : (
+              <span className="avatar avatar-sm avatar-fallback">{String(playerData.personaname ?? playerData.playerId).slice(0, 2)}</span>
+            )}
+            <span className="page-title-copy">
+              <span>{playerData.personaname ?? `Player ${playerData.playerId}`}</span>
+              <span className="page-title-meta">
+                <span>Steam ID {playerData.playerId}</span>
+                <span>{playerData.countryCode ?? "Country unknown"}</span>
+                <span>{formatRank(playerData.rankTier, playerData.leaderboardRank)}</span>
+              </span>
+            </span>
+          </span>
+        ) : (
+          `Player ${params.playerId ?? ""}`
+        )
       }
     >
       {query.isLoading ? <LoadingState label="Loading player data..." /> : null}
@@ -180,77 +276,193 @@ export function PlayerPage() {
               { label: "Match scope", value: playerData.matchScopeLabel },
               { label: "Win / loss", value: `${playerData.wins} / ${playerData.losses}` },
               { label: "Rank", value: formatRank(playerData.rankTier, playerData.leaderboardRank) },
-              { label: "Favorite", value: isFavorite ? "Yes" : "No" },
-              { label: "Refresh on open", value: playerData.autoRefreshOnOpen ? "Yes" : "No" },
-              { label: "Priority player", value: playerData.isPriorityPlayer ? "Yes" : "No" },
+              {
+                label: "Observer lifetime",
+                value:
+                  playerData.averageObserverWardLifetimePercent === null
+                    ? "No ward data"
+                    : `${playerData.averageObserverWardLifetimePercent}%`
+              },
               { label: "History synced", value: formatDate(playerData.historySyncedAt) }
             ]}
           />
 
-          <div className="two-column">
-            <Card title={playerData.personaname ?? `Player ${playerData.playerId}`}>
-              <div className="stack compact">
-                {playerData.avatar ? <img className="avatar" src={playerData.avatar} alt="" /> : null}
-                <p>Steam account ID: {playerData.playerId}</p>
-                <p>Country: {playerData.countryCode ?? "Unknown"}</p>
-                <p>Rank: {formatRank(playerData.rankTier, playerData.leaderboardRank)}</p>
-                {playerData.profileUrl ? (
-                  <a href={playerData.profileUrl} target="_blank" rel="noreferrer">
-                    Open profile
-                  </a>
+          <Card title="Scope and actions">
+            <div className="player-scope-header">
+              <div className="table-controls player-scope-controls player-scope-controls-wide">
+                {playerLeagues.length > 0 ? (
+                  <label>
+                    League
+                    <select
+                      value={leagueFilter}
+                      onChange={(event) => {
+                        const nextLeagueId = event.target.value;
+                        setLeagueFilter(nextLeagueId);
+                        updateScopeFilters({ leagueId: nextLeagueId });
+                        pagination.resetPage();
+                        heroUsagePagination.resetPage();
+                      }}
+                    >
+                      <option value="all">All leagues</option>
+                      {playerLeagues.map((league) => (
+                        <option key={league.leagueId} value={league.leagueId}>
+                          {league.leagueName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 ) : null}
-                {playerData.isPriorityPlayer ? (
-                  <p>This player is part of your priority set, so the app can keep a much deeper local match history for them.</p>
-                ) : (
-                  <p>Add this player to favorites if you want the app to keep a deeper local history instead of just the shallow recent snapshot.</p>
-                )}
-                <p>{playerData.autoRefreshOnOpen ? "This player refreshes from upstream each time you open the profile." : "Enable refresh on open if you want this profile to pull fresh data every time it is opened."}</p>
+                {playerData.availableHeroes.length > 0 ? (
+                  <label>
+                    Hero
+                    <select
+                      value={heroFilter}
+                      onChange={(event) => {
+                        const nextHeroId = event.target.value;
+                        setHeroFilter(nextHeroId);
+                        updateScopeFilters({ heroId: nextHeroId });
+                        pagination.resetPage();
+                        heroUsagePagination.resetPage();
+                      }}
+                    >
+                      <option value="all">All heroes</option>
+                      {playerData.availableHeroes.map((hero) => (
+                        <option key={hero.heroId} value={hero.heroId}>
+                          {hero.heroName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <label>
+                  Queue
+                  <select
+                    value={queueFilter}
+                    onChange={(event) => {
+                      const nextQueue = event.target.value as QueueFilter;
+                      setQueueFilter(nextQueue);
+                      updateScopeFilters({ queue: nextQueue });
+                      pagination.resetPage();
+                      heroUsagePagination.resetPage();
+                    }}
+                  >
+                    <option value="all">All queues</option>
+                    <option value="ranked">Ranked</option>
+                    <option value="unranked">Unranked</option>
+                    <option value="turbo">Turbo</option>
+                  </select>
+                </label>
+              </div>
+              <div className="player-header-actions">
+                {canManagePlayerPreferences ? (
+                  <>
+                    <button type="button" onClick={isYourPlayer ? clearAsYourPlayer : setAsYourPlayer} disabled={settingsQuery.isLoading}>
+                      {isYourPlayer ? "Unset as your player" : "Set as your player"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void toggleFavorite()}
+                      disabled={settingsQuery.isLoading || currentPrimaryPlayerId === null || isYourPlayer}
+                      title={
+                        currentPrimaryPlayerId === null
+                          ? "Set your player first"
+                          : isYourPlayer
+                            ? "Your player cannot also be a favorite"
+                            : undefined
+                      }
+                    >
+                      {isFavorite ? "Remove favorite" : "Add to favorites"}
+                    </button>
+                    <button type="button" onClick={toggleAutoRefresh} disabled={settingsQuery.isLoading}>
+                      {autoRefreshEnabled ? "Stop refresh on open" : "Refresh on open"}
+                    </button>
+                  </>
+                ) : null}
+                {canManagePlayerAdminActions ? (
+                  <>
+                    <button type="button" onClick={() => syncHistory.mutate()} disabled={syncHistory.isPending}>
+                      {syncHistory.isPending ? "Syncing..." : "Sync more history"}
+                    </button>
+                  </>
+                ) : null}
                 <Link className="inline-link-chip" to={`/compare?ids=${playerData.playerId}`}>
                   Compare this player
                 </Link>
-                {saveSettings.isError ? <p className="form-error">{(saveSettings.error as Error).message}</p> : null}
-                {saveSettings.isSuccess ? <p className="form-success">Favorite players updated locally.</p> : null}
-                {syncHistory.isError ? <p className="form-error">{(syncHistory.error as Error).message}</p> : null}
-                {syncHistory.isSuccess ? <p className="form-success">Deeper player history synced locally.</p> : null}
               </div>
-            </Card>
+            </div>
+            {syncHistory.isError ? <p className="form-error">{(syncHistory.error as Error).message}</p> : null}
+            {syncHistory.isSuccess ? <p className="form-success">Deeper player history synced locally.</p> : null}
+          </Card>
 
-            <Card title="Match activity calendar">
-              {activityDays.length === 0 ? (
-                <EmptyState label="No locally stored matches yet." />
-              ) : (
-                <div className="stack compact">
-                  <div className="calendar-grid">
-                    {activityDays.map(([day, stats]) => {
-                      const bubbleSize = 12 + Math.round((stats.total / maxDailyMatches) * 20);
-                      const tone =
-                        stats.wins > stats.losses ? "win" : stats.losses > stats.wins ? "loss" : "neutral";
-
-                      return (
-                        <div
-                          key={day}
-                          className="calendar-cell"
-                          title={`${day} | ${stats.total} matches | ${stats.wins}W / ${stats.losses}L`}
-                        >
-                          <span className="calendar-day">{day.slice(8)}</span>
-                          <span className={`calendar-bubble ${tone}`} style={{ width: `${bubbleSize}px`, height: `${bubbleSize}px` }} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="muted-inline">
-                    Bigger bubbles mean more matches on that day. Win-favored days use the positive color, loss-favored days use the negative color, and gray means even.
-                  </p>
-                </div>
-              )}
-            </Card>
+          <div className="settings-tabs" role="tablist" aria-label="Player sections">
+            {[
+              ["overview", "Overview"],
+              ["heroes", "Heroes"],
+              ["teammates", "Teammates"],
+              ["matches", "Matches"]
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`settings-tab ${activeTab === key ? "active" : ""}`}
+                onClick={() => setActiveTab(key as PlayerTab)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
+          {activeTab === "overview" ? (
+          <div className="two-column two-column-balanced">
+              <Card title="Performance radar">
+                <StatsRadarChart
+                  key={playerData.playerId}
+                  players={[
+                    {
+                      playerId: playerData.playerId,
+                      personaname: playerData.personaname,
+                      comparisonStats: playerData.comparisonStats
+                    }
+                  ]}
+                  compact
+                />
+              </Card>
+              <Card title="Match activity calendar">
+                {activityDays.length === 0 ? (
+                  <EmptyState label="No locally stored matches yet." />
+                ) : (
+                  <div className="stack compact">
+                    <div className="calendar-grid">
+                      {activityDays.map(([day, stats]) => {
+                        const bubbleSize = 12 + Math.round((stats.total / maxDailyMatches) * 20);
+                        const tone =
+                          stats.wins > stats.losses ? "win" : stats.losses > stats.wins ? "loss" : "neutral";
+
+                        return (
+                          <div
+                            key={day}
+                            className="calendar-cell"
+                            title={`${day} | ${stats.total} matches | ${stats.wins}W / ${stats.losses}L`}
+                          >
+                            <span className="calendar-day">{day.slice(8)}</span>
+                            <span className={`calendar-bubble ${tone}`} style={{ width: `${bubbleSize}px`, height: `${bubbleSize}px` }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </Card>
+          </div>
+          ) : null}
+
+          {activeTab === "heroes" || activeTab === "teammates" ? (
           <div className="two-column">
+            {activeTab === "heroes" ? (
             <TableCard
               title="Hero usage"
               rowCount={pagedHeroUsage.length}
-              totalItems={playerData.heroUsage.length}
+              totalItems={filteredHeroUsage.length}
               page={heroUsagePagination.page}
               totalPages={heroUsagePagination.totalPages}
               pageSize={heroUsagePagination.pageSize}
@@ -258,23 +470,47 @@ export function PlayerPage() {
               onPreviousPage={heroUsagePagination.previousPage}
               onNextPage={heroUsagePagination.nextPage}
               onPageSizeChange={heroUsagePagination.setPageSize}
+              extra={
+                <div className="table-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={heroSearch}
+                      onChange={(event) => {
+                        setHeroSearch(event.target.value);
+                        heroUsagePagination.resetPage();
+                      }}
+                      placeholder="Hero"
+                    />
+                  </label>
+                </div>
+              }
               empty={<EmptyState label="No locally stored hero usage for the active match scope yet." />}
             >
-              {playerData.heroUsage.length === 0 ? (
+              {filteredHeroUsage.length === 0 ? (
                 <EmptyState label="No locally stored hero usage for the active match scope yet." />
               ) : (
                 <div className="stack compact">
                   <p className="muted-inline">Scope: {playerData.matchScopeLabel}</p>
                   {pagedHeroUsage.map((hero) => (
                     <div key={hero.heroId} className="hero-bar-row">
-                      <div className="entity-link">
+                      <Link
+                        className="entity-link"
+                        to={`/players/${playerData.playerId}?${new URLSearchParams({
+                          ...(leagueFilter !== "all" ? { leagueId: leagueFilter } : {}),
+                          ...(queueFilter !== "all" ? { queue: queueFilter } : {}),
+                          heroId: String(hero.heroId),
+                          tab: "matches"
+                        }).toString()}`}
+                      >
                         <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="sm" />
                         <span>{hero.heroName}</span>
-                      </div>
+                      </Link>
                       <div className="hero-bar-track">
                         <div
                           className="hero-bar-fill"
-                          style={{ width: `${Math.max(8, (hero.games / playerData.heroUsage[0].games) * 100)}%` }}
+                          style={{ width: `${Math.max(8, (hero.games / filteredHeroUsage[0].games) * 100)}%` }}
                         />
                       </div>
                       <strong>{hero.games}</strong>
@@ -284,7 +520,9 @@ export function PlayerPage() {
                 </div>
               )}
             </TableCard>
+            ) : null}
 
+            {activeTab === "teammates" ? (
             <Card title="Most played with">
               {playerData.peers.length === 0 ? (
                 <EmptyState label="No repeated teammates found in the local dataset yet." />
@@ -319,9 +557,13 @@ export function PlayerPage() {
                 </div>
               )}
             </Card>
+            ) : null}
           </div>
+          ) : null}
 
-          <Card title="History filters">
+          {activeTab === "matches" ? (
+          <>
+          <Card title="Match result filter">
             <div className="table-controls">
               <label>
                 Result
@@ -351,6 +593,22 @@ export function PlayerPage() {
             onPreviousPage={pagination.previousPage}
             onNextPage={pagination.nextPage}
             onPageSizeChange={pagination.setPageSize}
+            extra={
+              <div className="table-controls">
+                <label>
+                  Search
+                  <input
+                    type="search"
+                    value={matchSearch}
+                    onChange={(event) => {
+                      setMatchSearch(event.target.value);
+                      pagination.resetPage();
+                    }}
+                    placeholder="Match, hero, league, queue"
+                  />
+                </label>
+              </div>
+            }
             empty={<EmptyState label="No matches stored for this filter yet." />}
           >
             <DataTable
@@ -377,10 +635,10 @@ export function PlayerPage() {
                   header: "Hero",
                   sortable: true,
                   cell: (match) => (
-                    <span className="entity-link">
+                    <Link className="entity-link" to={`/heroes/${match.heroId}`}>
                       <IconImage src={match.heroIconUrl} alt={match.heroName ?? "Hero"} size="sm" />
                       <span>{match.heroName ?? match.heroId ?? "Unknown"}</span>
-                    </span>
+                    </Link>
                   )
                 },
                 {
@@ -400,6 +658,21 @@ export function PlayerPage() {
                   header: "Result",
                   sortable: true,
                   cell: (match) => (match.win === null ? "Unknown" : match.win ? "Win" : "Loss")
+                },
+                {
+                  key: "queue",
+                  header: "Queue",
+                  cell: (match) => match.gameModeLabel
+                },
+                {
+                  key: "league",
+                  header: "League",
+                  cell: (match) =>
+                    match.leagueId ? (
+                      <Link to={`/leagues/${match.leagueId}`}>{match.leagueName ?? `League ${match.leagueId}`}</Link>
+                    ) : (
+                      "Public"
+                    )
                 },
                 {
                   key: "parsedData",
@@ -429,6 +702,8 @@ export function PlayerPage() {
               }}
             />
           </TableCard>
+          </>
+          ) : null}
         </>
       ) : null}
     </Page>
