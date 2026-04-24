@@ -1,16 +1,30 @@
 import { resolve } from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import open from "open";
 import { registerRoutes } from "./api/routes.js";
 import { closeDb, runMigrations } from "./db/client.js";
 import { config } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
+import { SettingsService } from "./services/settingsService.js";
 
-const app = Fastify({ logger: false });
+const app = Fastify({
+  logger: false,
+  trustProxy: config.appMode === "public" || config.nodeEnv === "production"
+});
 
-await app.register(cors, { origin: true });
+const settingsService = new SettingsService();
+
+const corsOrigin = config.nodeEnv === "production" && config.publicOrigin ? [config.publicOrigin] : true;
+
+await app.register(cors, { origin: corsOrigin });
+await app.register(rateLimit, {
+  global: true,
+  max: 240,
+  timeWindow: "1 minute"
+});
 await registerRoutes(app);
 
 if (config.nodeEnv === "production") {
@@ -47,6 +61,13 @@ if (config.nodeEnv === "production") {
 }
 
 runMigrations();
+const seededAdminPassword = await settingsService.seedAdminPasswordFromConfig();
+if (seededAdminPassword) {
+  logger.info("Seeded admin password hash from environment");
+}
+if ((config.appMode === "public" || config.nodeEnv === "production") && !(await settingsService.hasAdminPasswordConfigured())) {
+  logger.warn("No admin password hash is configured; in-app admin controls will remain unavailable");
+}
 
 const address = await app.listen({
   host: config.backendHost,

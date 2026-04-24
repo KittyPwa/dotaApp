@@ -376,7 +376,7 @@ export class SettingsService {
   async verifyAdminPassword(password: string | null | undefined) {
     const [row] = await db.select().from(settings).where(eq(settings.key, ADMIN_PASSWORD_HASH_KEY)).limit(1);
     const storedHash = row?.value ?? null;
-    if (!storedHash) return true;
+    if (!storedHash) return false;
     if (!password) return false;
     return verifyPassword(password, storedHash);
   }
@@ -409,5 +409,13 @@ export class SettingsService {
       });
 
     return this.getSettings({ adminUnlocked: true });
+  }
+
+  async seedAdminPasswordFromConfig() {
+    const configuredPassword = config.adminPassword?.trim();
+    if (!configuredPassword) return false;
+    if (await this.hasAdminPasswordConfigured()) return false;
+    await this.setAdminPassword(configuredPassword);
+    return true;
   }
 }

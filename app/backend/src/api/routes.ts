@@ -4,9 +4,13 @@ import type { FastifyInstance } from "fastify";
 import { DotaDataService } from "../services/dotaDataService.js";
 import { checkDbHealth } from "../db/client.js";
 import { getCachedAssetBuffer, getCachedCurrentDotaMapBuffer, getMimeType } from "../utils/assets.js";
+import { config } from "../utils/config.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   const service = new DotaDataService();
+  const expensiveReadRateLimit = { rateLimit: { max: 60, timeWindow: "1 minute" } };
+  const expensiveWriteRateLimit = { rateLimit: { max: 6, timeWindow: "10 minutes" } };
+  const adminAuthRateLimit = { rateLimit: { max: 5, timeWindow: "15 minutes" } };
   const isAdminRequest = async (request: { headers: Record<string, unknown> }) => {
     const rawHeader = request.headers["x-admin-password"];
     const password = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
@@ -144,7 +148,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/leagues/:leagueId/sync", async (request, reply) => {
+  app.post("/api/leagues/:leagueId/sync", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);
       return { message: "Admin access required." };
@@ -159,7 +163,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/api/players/:playerId", async (request, reply) => {
+  app.get("/api/players/:playerId", { config: expensiveReadRateLimit }, async (request, reply) => {
     const params = z.object({ playerId: z.coerce.number().int().positive() }).parse(request.params);
     const query = z
       .object({
@@ -182,7 +186,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/api/players/compare", async (request, reply) => {
+  app.get("/api/players/compare", { config: expensiveReadRateLimit }, async (request, reply) => {
     const query = z.object({ ids: z.string().min(3) }).parse(request.query);
     const ids = query.ids
       .split(",")
@@ -200,7 +204,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/players/:playerId/sync-history", async (request, reply) => {
+  app.post("/api/players/:playerId/sync-history", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);
       return { message: "Admin access required." };
@@ -214,7 +218,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/api/matches/:matchId", async (request, reply) => {
+  app.get("/api/matches/:matchId", { config: expensiveReadRateLimit }, async (request, reply) => {
     const params = z.object({ matchId: z.coerce.number().int().positive() }).parse(request.params);
     try {
       return await service.getMatchOverview(params.matchId);
@@ -224,7 +228,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/matches/:matchId/refresh", async (request, reply) => {
+  app.post("/api/matches/:matchId/refresh", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);
       return { message: "Admin access required." };
@@ -278,7 +282,11 @@ export async function registerRoutes(app: FastifyInstance) {
     return service.updateSettings(body);
   });
 
-  app.post("/api/admin/setup", async (request, reply) => {
+  app.post("/api/admin/setup", { config: adminAuthRateLimit }, async (request, reply) => {
+    if (service.getAppMode() === "public" || config.nodeEnv === "production") {
+      reply.code(403);
+      return { message: "Admin setup is disabled in public mode." };
+    }
     const body = z
       .object({
         password: z.string().min(10)
@@ -292,7 +300,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/admin/unlock", async (request, reply) => {
+  app.post("/api/admin/unlock", { config: adminAuthRateLimit }, async (request, reply) => {
     const body = z.object({ password: z.string().min(1) }).parse(request.body ?? {});
     if (!(await service.verifyAdminPassword(body.password))) {
       reply.code(403);
@@ -305,7 +313,7 @@ export async function registerRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/providers/stratz/test/:playerId", async (request, reply) => {
+  app.get("/api/providers/stratz/test/:playerId", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);
       return { message: "Admin access required." };
@@ -319,7 +327,7 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/api/providers/steam/league-test/:leagueId", async (request, reply) => {
+  app.get("/api/providers/steam/league-test/:leagueId", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);
       return { message: "Admin access required." };

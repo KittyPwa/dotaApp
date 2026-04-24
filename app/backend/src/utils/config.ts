@@ -14,6 +14,7 @@ const envSchema = z.object({
   BACKEND_HOST: z.string().default("127.0.0.1"),
   BACKEND_PORT: z.coerce.number().default(3344),
   FRONTEND_PORT: z.coerce.number().default(5173),
+  PUBLIC_ORIGIN: z.string().optional(),
   DATABASE_PATH: z.string().default(defaultDatabasePath),
   PLAYER_RECENT_MATCHES_TTL_MINUTES: z.coerce.number().default(30),
   REFERENCE_DATA_TTL_HOURS: z.coerce.number().default(168),
@@ -32,6 +33,7 @@ export const config = {
   backendHost: env.BACKEND_HOST,
   backendPort: env.BACKEND_PORT,
   frontendPort: env.FRONTEND_PORT,
+  publicOrigin: env.PUBLIC_ORIGIN ?? null,
   databasePath: env.DATABASE_PATH,
   openBrowser: env.OPEN_BROWSER === "true",
   staleWindows: {

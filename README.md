@@ -206,14 +206,48 @@ Fill in:
 
 - `DOMAIN`
 - `APP_IMAGE`
+- `BASIC_AUTH_USER`
+- `BASIC_AUTH_HASH`
 - `ADMIN_PASSWORD`
 - optional API keys
+- `BACKUP_RETENTION_DAYS`
+- `BACKUP_INTERVAL_SECONDS`
 
-Then start the stack:
+Generate the Caddy password hash on any machine with Docker:
+
+```bash
+docker run --rm caddy:2.10-alpine caddy hash-password --plaintext "choose-a-strong-password"
+```
+
+Put the resulting hash in `BASIC_AUTH_HASH`.
+
+### First deploy
+
+1. Set `ADMIN_PASSWORD` in `deploy/.env.production` before the first public start.
+2. Set `BASIC_AUTH_USER` and `BASIC_AUTH_HASH` so Caddy protects the whole site.
+3. Start the stack:
 
 ```bash
 docker compose up -d
 ```
+
+4. Confirm the app container is healthy:
+
+```bash
+docker compose ps
+docker compose logs app --tail=50
+```
+
+5. Confirm the admin password hash was seeded:
+
+```bash
+docker compose logs app --tail=50 | grep "Seeded admin password hash from environment"
+```
+
+6. Open the domain in a fresh browser session:
+   - Caddy should prompt for basic auth before the app loads.
+   - `POST /api/admin/setup` should be blocked in public mode.
+   - `Settings` should require the seeded `ADMIN_PASSWORD` for admin unlock.
 
 The app will be available through Caddy on your configured domain.
 
@@ -234,6 +268,48 @@ To enable automatic server deploys, add these repository secrets:
 `DEPLOY_PATH` should point to the server folder containing `deploy/docker-compose.yml` and `deploy/update.sh`.
 
 If you only want image publishing and not automatic deploy yet, do not set those secrets. The workflow will still publish the image.
+
+## Backups and restore
+
+The production Compose stack includes a `backup` container that creates timestamped SQLite snapshots under the `dota_backups` Docker volume using `VACUUM INTO`. Old backups are pruned automatically based on `BACKUP_RETENTION_DAYS`.
+
+### Verify backups are being created
+
+```bash
+docker compose logs backup --tail=50
+docker compose run --rm backup sh -c 'ls -lah /backups'
+```
+
+### Restore from backup
+
+1. Stop the app stack:
+
+```bash
+docker compose stop app backup caddy
+```
+
+2. Copy the chosen backup over the live database:
+
+```bash
+docker compose run --rm app sh -c 'cp /backups/<backup-file>.sqlite /data/dota-analytics.sqlite'
+```
+
+3. Start the stack again:
+
+```bash
+docker compose up -d
+```
+
+4. Confirm the data is present after restart by checking the dashboard or a known match/player.
+
+### Verify persistence after restart
+
+```bash
+docker compose restart app
+docker compose exec app node -e "fetch('http://127.0.0.1:3344/api/health').then(r=>r.text()).then(console.log)"
+```
+
+The SQLite file lives in the persistent `dota_data` volume, so container recreation should not erase stored matches or settings.
 
 ## Publishing recommendation
 

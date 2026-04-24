@@ -1,5 +1,15 @@
 {$DOMAIN} {
   encode zstd gzip
+  basic_auth * {
+    {$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    X-Frame-Options "DENY"
+  }
 
   reverse_proxy app:3344
 }
