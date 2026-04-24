@@ -1,6 +1,10 @@
+x-app-build: &app-build
+  context: ..
+
 services:
   app:
-    image: ${APP_IMAGE}
+    image: ${APP_IMAGE:-dota-local-analytics:local}
+    build: *app-build
     restart: unless-stopped
     env_file:
       - .env.production
@@ -29,7 +33,8 @@ services:
         max-file: "5"
 
   backup:
-    image: ${APP_IMAGE}
+    image: ${APP_IMAGE:-dota-local-analytics:local}
+    build: *app-build
     restart: unless-stopped
     depends_on:
       app:

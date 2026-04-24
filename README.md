@@ -179,11 +179,31 @@ Why this stack:
 
 ### Recommended production flow
 
+You can deploy this stack in two ways:
+
+1. Local VPS build for first deployment
+2. GHCR image deployment later for smoother updates
+
+#### Option A: local VPS build first
+
+This is the simplest first deployment path on a strong enough VPS:
+
+```bash
+docker compose up -d --build
+```
+
+In this mode, `APP_IMAGE` can be left blank and Compose will build the app image directly from the repository root.
+
+#### Option B: GHCR image deployment later
+
+Once you want CI/CD-driven deploys:
+
 1. Push working changes to `main`
 2. GitHub Actions builds and publishes a Docker image to GHCR
-3. Your server pulls the new image
-4. Docker Compose restarts the app
-5. Caddy keeps the app available on your domain over HTTPS
+3. Set `APP_IMAGE=ghcr.io/...` in `deploy/.env.production`
+4. Your server pulls the new image
+5. Docker Compose restarts the app
+6. Caddy keeps the app available on your domain over HTTPS
 
 ## Server setup
 
@@ -205,7 +225,7 @@ cp .env.production.example .env.production
 Fill in:
 
 - `DOMAIN`
-- `APP_IMAGE`
+- optional `APP_IMAGE`
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_HASH`
 - `ADMIN_PASSWORD`
@@ -221,30 +241,39 @@ docker run --rm caddy:2.10-alpine caddy hash-password --plaintext "choose-a-stro
 
 Put the resulting hash in `BASIC_AUTH_HASH`.
 
+If you want the simplest first VPS deployment, leave `APP_IMAGE` blank and use `docker compose up -d --build`.
+
 ### First deploy
 
 1. Set `ADMIN_PASSWORD` in `deploy/.env.production` before the first public start.
 2. Set `BASIC_AUTH_USER` and `BASIC_AUTH_HASH` so Caddy protects the whole site.
-3. Start the stack:
+3. For a local-build first deploy, start the stack with:
 
 ```bash
+docker compose up -d --build
+```
+
+4. If you prefer an image-based deploy later, set `APP_IMAGE` and use:
+
+```bash
+docker compose pull
 docker compose up -d
 ```
 
-4. Confirm the app container is healthy:
+5. Confirm the app container is healthy:
 
 ```bash
 docker compose ps
 docker compose logs app --tail=50
 ```
 
-5. Confirm the admin password hash was seeded:
+6. Confirm the admin password hash was seeded:
 
 ```bash
 docker compose logs app --tail=50 | grep "Seeded admin password hash from environment"
 ```
 
-6. Open the domain in a fresh browser session:
+7. Open the domain in a fresh browser session:
    - Caddy should prompt for basic auth before the app loads.
    - `POST /api/admin/setup` should be blocked in public mode.
    - `Settings` should require the seeded `ADMIN_PASSWORD` for admin unlock.
@@ -268,6 +297,16 @@ To enable automatic server deploys, add these repository secrets:
 `DEPLOY_PATH` should point to the server folder containing `deploy/docker-compose.yml` and `deploy/update.sh`.
 
 If you only want image publishing and not automatic deploy yet, do not set those secrets. The workflow will still publish the image.
+
+To switch an existing VPS from local-build mode to GHCR mode later:
+
+1. set `APP_IMAGE` in `deploy/.env.production`
+2. run:
+
+```bash
+docker compose pull
+docker compose up -d
+```
 
 ## Backups and restore
 
