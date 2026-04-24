@@ -275,59 +275,6 @@ const ignoredInventoryItemSlugs = new Set([
 ]);
 
 const teleportItemSlugs = new Set(["tpscroll"]);
-const neutralItemSlugs = new Set([
-  "trusty_shovel",
-  "arcane_ring",
-  "broom_handle",
-  "faded_broach",
-  "keen_optic",
-  "mysterious_hat",
-  "pig_pole",
-  "royal_jelly",
-  "seeds_of_serenity",
-  "safety_bubble",
-  "occult_bracelet",
-  "duelist_gloves",
-  "spark_of_courage",
-  "gossamer_cape",
-  "lance_of_pursuit",
-  "philosophers_stone",
-  "pupil_gift",
-  "ring_of_aquila",
-  "vambrace",
-  "bullwhip",
-  "dragon_scale",
-  "essence_distiller",
-  "essence_ring",
-  "eye_of_the_vizier",
-  "grove_bow",
-  "quickening_charm",
-  "specialists_array",
-  "ceremonial_robe",
-  "cloak_of_flames",
-  "elven_tunic",
-  "psychic_headband",
-  "timeless_relic",
-  "trickster_cloak",
-  "ninja_gear",
-  "ascetic_cap",
-  "avian_rime",
-  "pirate_hat",
-  "force_boots",
-  "seer_stone",
-  "giants_ring",
-  "book_of_shadows",
-  "mirror_shield",
-  "stygian_desolator",
-  "woodland_striders",
-  "unrelenting_eye",
-  "flicker",
-  "minotaur_horn",
-  "stormcrafter",
-  "penta_edged_sword",
-  "vital_toadstool"
-]);
-
 const startingStackCounts: Record<string, number> = {
   tango: 3,
   enchanted_mango: 1,
@@ -1156,8 +1103,7 @@ function isTeleportItem(itemName: string) {
 }
 
 function isNeutralItem(itemName: string) {
-  const slug = normalizeItemSlug(itemName);
-  return neutralItemSlugs.has(slug) || slug.includes("neutral_token");
+  return false;
 }
 
 function buildFinalRosterInventory(player: TimelinePlayer): RosterInventoryState {
@@ -2583,22 +2529,6 @@ export function MatchPage() {
                                   </span>
                                 ))}
                             </div>
-                            <span
-                              className={`item-slot utility neutral-inline${rosterInventory.neutral ? "" : " empty"}`}
-                              title={rosterInventory.neutral?.name ?? "Neutral item slot"}
-                            >
-                              {rosterInventory.neutral ? (
-                                <IconImage
-                                  src={rosterInventory.neutral.imageUrl}
-                                  alt={rosterInventory.neutral.name}
-                                  size="sm"
-                                  rounded={false}
-                                />
-                              ) : null}
-                              {rosterInventory.neutral?.count && rosterInventory.neutral.count > 1 ? (
-                                <span className="item-slot-count">{rosterInventory.neutral.count}</span>
-                              ) : null}
-                            </span>
                             </div>
                             <div className="inventory-meta-row">
                               <span className="eyebrow">Backpack</span>
