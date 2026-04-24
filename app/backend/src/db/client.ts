@@ -39,6 +39,13 @@ export function runMigrations() {
   );
   sqlite.exec(migrationSql);
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS teams (
+      id integer primary key,
+      name text not null,
+      tag text,
+      created_at integer not null default (unixepoch() * 1000),
+      updated_at integer not null default (unixepoch() * 1000)
+    );
     CREATE TABLE IF NOT EXISTS provider_request_events (
       id integer primary key autoincrement,
       provider text not null,
@@ -66,6 +73,8 @@ export function runMigrations() {
   ensureColumn("match_players", "courier_kills", "integer");
   ensureColumn("match_players", "lobby_type", "integer");
   ensureColumn("match_players", "item_neutral", "integer");
+  ensureColumn("matches", "radiant_team_id", "integer");
+  ensureColumn("matches", "dire_team_id", "integer");
   ensureColumn("heroes", "icon_path", "text");
   ensureColumn("heroes", "portrait_path", "text");
   ensureColumn("items", "image_path", "text");

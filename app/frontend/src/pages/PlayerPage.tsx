@@ -276,13 +276,6 @@ export function PlayerPage() {
               { label: "Match scope", value: playerData.matchScopeLabel },
               { label: "Win / loss", value: `${playerData.wins} / ${playerData.losses}` },
               { label: "Rank", value: formatRank(playerData.rankTier, playerData.leaderboardRank) },
-              {
-                label: "Observer lifetime",
-                value:
-                  playerData.averageObserverWardLifetimePercent === null
-                    ? "No ward data"
-                    : `${playerData.averageObserverWardLifetimePercent}%`
-              },
               { label: "History synced", value: formatDate(playerData.historySyncedAt) }
             ]}
           />

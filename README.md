@@ -149,6 +149,106 @@ npm run start
 
 In production mode the backend serves the built frontend and opens the browser to the local backend URL.
 
+## Recommended public deployment
+
+Recommended stack:
+
+- GitHub as source control
+- GitHub Actions for CI/CD
+- GHCR (`ghcr.io`) for container images
+- A small Linux VPS for runtime
+- Docker Compose for app orchestration
+- Caddy for HTTPS and reverse proxy
+
+Why this stack:
+
+- it keeps the deployment simple
+- it is easy to update from `main`
+- SQLite remains local to the server volume
+- there is no extra cloud application platform to fight with
+- you can keep using the app as a single full-stack service
+
+### What is included in this repository
+
+- `Dockerfile`
+- `deploy/docker-compose.yml`
+- `deploy/Caddyfile`
+- `deploy/.env.production.example`
+- `deploy/update.sh`
+- `.github/workflows/deploy.yml`
+
+### Recommended production flow
+
+1. Push working changes to `main`
+2. GitHub Actions builds and publishes a Docker image to GHCR
+3. Your server pulls the new image
+4. Docker Compose restarts the app
+5. Caddy keeps the app available on your domain over HTTPS
+
+## Server setup
+
+On a fresh Ubuntu VPS:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin
+sudo usermod -aG docker $USER
+```
+
+Clone the repo on the server, then:
+
+```bash
+cd dotaApp/deploy
+cp .env.production.example .env.production
+```
+
+Fill in:
+
+- `DOMAIN`
+- `APP_IMAGE`
+- `ADMIN_PASSWORD`
+- optional API keys
+
+Then start the stack:
+
+```bash
+docker compose up -d
+```
+
+The app will be available through Caddy on your configured domain.
+
+## GitHub Actions deployment
+
+The workflow in `.github/workflows/deploy.yml` does two things on pushes to `main`:
+
+1. builds and pushes the Docker image to GHCR
+2. optionally SSHes into your server and runs `deploy/update.sh`
+
+To enable automatic server deploys, add these repository secrets:
+
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_SSH_KEY`
+- `DEPLOY_PATH`
+
+`DEPLOY_PATH` should point to the server folder containing `deploy/docker-compose.yml` and `deploy/update.sh`.
+
+If you only want image publishing and not automatic deploy yet, do not set those secrets. The workflow will still publish the image.
+
+## Publishing recommendation
+
+For this project, the cleanest path is:
+
+- keep day-to-day work on `dev`
+- merge stable snapshots into `main`
+- let `main` be the only branch that publishes containers and deploys to the public server
+
+That gives you:
+
+- a safe working branch
+- a stable deployment branch
+- a clean CI/CD story for future updates
+
 ## One-click launcher on Windows
 
 Use one of these from the project root:

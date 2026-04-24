@@ -16,6 +16,7 @@ const LIMIT_TO_RECENT_PATCHES_KEY = "limitToRecentPatches";
 const RECENT_PATCH_COUNT_KEY = "recentPatchCount";
 const AUTO_REFRESH_PLAYER_IDS_KEY = "autoRefreshPlayerIds";
 const COLORBLIND_MODE_KEY = "colorblindMode";
+const DARK_MODE_KEY = "darkMode";
 const STRATZ_PER_SECOND_CAP_KEY = "stratzPerSecondCap";
 const STRATZ_PER_MINUTE_CAP_KEY = "stratzPerMinuteCap";
 const STRATZ_PER_HOUR_CAP_KEY = "stratzPerHourCap";
@@ -114,6 +115,7 @@ export class SettingsService {
       recentPatchCount: Number.isFinite(parsedRecentPatchCount) ? Math.max(0, parsedRecentPatchCount) : 2,
       autoRefreshPlayerIds: parsePlayerIdList(map.get(AUTO_REFRESH_PLAYER_IDS_KEY)),
       colorblindMode: map.get(COLORBLIND_MODE_KEY) === "true",
+      darkMode: map.get(DARK_MODE_KEY) === "true",
       stratzPerSecondCap: Number.isFinite(parsedStratzPerSecondCap) ? Math.min(1000, Math.max(1, parsedStratzPerSecondCap)) : 20,
       stratzPerMinuteCap: Number.isFinite(parsedStratzPerMinuteCap) ? Math.min(10000, Math.max(1, parsedStratzPerMinuteCap)) : 250,
       stratzPerHourCap: Number.isFinite(parsedStratzPerHourCap) ? Math.min(100000, Math.max(1, parsedStratzPerHourCap)) : 2000,
@@ -298,6 +300,18 @@ export class SettingsService {
       .onConflictDoUpdate({
         target: settings.key,
         set: { value: input.colorblindMode ? "true" : "false", updatedAt: now }
+      });
+
+    await db
+      .insert(settings)
+      .values({
+        key: DARK_MODE_KEY,
+        value: input.darkMode ? "true" : "false",
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value: input.darkMode ? "true" : "false", updatedAt: now }
       });
 
     await db

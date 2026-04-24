@@ -11,6 +11,7 @@ const defaultDatabasePath = process.env.LOCALAPPDATA
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   APP_MODE: z.enum(["personal", "public"]).default("personal"),
+  BACKEND_HOST: z.string().default("127.0.0.1"),
   BACKEND_PORT: z.coerce.number().default(3344),
   FRONTEND_PORT: z.coerce.number().default(5173),
   DATABASE_PATH: z.string().default(defaultDatabasePath),
@@ -28,6 +29,7 @@ const env = envSchema.parse(process.env);
 export const config = {
   nodeEnv: env.NODE_ENV,
   appMode: env.APP_MODE,
+  backendHost: env.BACKEND_HOST,
   backendPort: env.BACKEND_PORT,
   frontendPort: env.FRONTEND_PORT,
   databasePath: env.DATABASE_PATH,

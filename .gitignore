@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
+.env.production
 .data
 .run
 app/backend/.data
@@ -9,4 +10,5 @@ app/frontend/dist
 data/
 logs/
 *.log
+deploy/.env.production
 -

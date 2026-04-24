@@ -36,6 +36,18 @@ export const heroes = sqliteTable("heroes", {
     .default(sql`(unixepoch() * 1000)`)
 });
 
+export const teams = sqliteTable("teams", {
+  id: integer("id").primaryKey(),
+  name: text("name").notNull(),
+  tag: text("tag"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`)
+});
+
 export const matches = sqliteTable("matches", {
   id: integer("id").primaryKey(),
   startTime: integer("start_time", { mode: "timestamp_ms" }),
@@ -45,6 +57,8 @@ export const matches = sqliteTable("matches", {
   direScore: integer("dire_score"),
   patchId: integer("patch_id"),
   leagueId: integer("league_id"),
+  radiantTeamId: integer("radiant_team_id").references(() => teams.id, { onDelete: "set null" }),
+  direTeamId: integer("dire_team_id").references(() => teams.id, { onDelete: "set null" }),
   providerSource: text("provider_source").notNull().default("opendota"),
   lastFetchedAt: integer("last_fetched_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" })

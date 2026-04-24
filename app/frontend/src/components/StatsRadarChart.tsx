@@ -17,6 +17,7 @@ const singlePlayerBaselines: Record<string, number> = {
   heroHealing: 18000,
   towerDamage: 15000,
   wardsPlaced: 30,
+  wardEfficiency: 100,
   observerWardsDestroyed: 10,
   campStacked: 20,
   courierKills: 5,

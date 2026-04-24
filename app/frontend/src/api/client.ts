@@ -3,6 +3,7 @@ const apiBase =
 
 const ADMIN_PASSWORD_STORAGE_KEY = "dota-admin-password";
 const SESSION_COLORBLIND_KEY = "dota-session-colorblind-mode";
+const SESSION_DARK_MODE_KEY = "dota-session-dark-mode";
 const SESSION_LIMIT_PATCHES_KEY = "dota-session-limit-patches";
 const SESSION_PATCH_COUNT_KEY = "dota-session-patch-count";
 const LOCAL_PRIMARY_PLAYER_ID_KEY = "dota-local-primary-player-id";
@@ -105,6 +106,25 @@ export function setSessionColorblindModeOverride(value: boolean | null) {
     return;
   }
   window.sessionStorage.setItem(SESSION_COLORBLIND_KEY, value ? "true" : "false");
+  notifySessionPreferencesChanged();
+}
+
+export function getSessionDarkModeOverride() {
+  if (typeof window === "undefined") return null;
+  const value = window.sessionStorage.getItem(SESSION_DARK_MODE_KEY);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+export function setSessionDarkModeOverride(value: boolean | null) {
+  if (typeof window === "undefined") return;
+  if (value === null) {
+    window.sessionStorage.removeItem(SESSION_DARK_MODE_KEY);
+    notifySessionPreferencesChanged();
+    return;
+  }
+  window.sessionStorage.setItem(SESSION_DARK_MODE_KEY, value ? "true" : "false");
   notifySessionPreferencesChanged();
 }
 

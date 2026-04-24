@@ -10,7 +10,8 @@ import type {
   MatchOverview,
   PlayerCompareResponse,
   PlayerOverview,
-  SettingsPayload
+  SettingsPayload,
+  TeamOverview
 } from "@dota/shared";
 import { apiGet, apiPost } from "../api/client";
 
@@ -64,6 +65,14 @@ export function useLeague(leagueId: number | null) {
   });
 }
 
+export function useLeagueTeam(leagueId: number | null, teamId: number | null) {
+  return useQuery({
+    queryKey: ["league-team", leagueId, teamId],
+    queryFn: () => apiGet<TeamOverview>(`/api/leagues/${leagueId}/teams/${teamId}`),
+    enabled: leagueId !== null && teamId !== null
+  });
+}
+
 export function useSyncLeague(leagueId: number | null) {
   const queryClient = useQueryClient();
 
@@ -71,6 +80,7 @@ export function useSyncLeague(leagueId: number | null) {
     mutationFn: (limit: number) => apiPost<LeagueSyncResponse>(`/api/leagues/${leagueId}/sync`, { limit }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["league", leagueId] });
+      await queryClient.invalidateQueries({ queryKey: ["league-team"] });
       await queryClient.invalidateQueries({ queryKey: ["leagues"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });

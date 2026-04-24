@@ -9,14 +9,15 @@ import type {
   MatchOverview,
   PlayerCompareResponse,
   PlayerOverview,
-  SettingsPayload
+  SettingsPayload,
+  TeamOverview
 } from "@dota/shared";
 import { OpenDotaAdapter, type OpenDotaLeagueMatch, type OpenDotaRecentMatch } from "../adapters/openDota.js";
 import { StratzAdapter, type StratzLeagueMatch, type StratzMatchTelemetry, type StratzMatchTelemetryPlayer } from "../adapters/stratz.js";
 import { ValveDotaAdapter, type ValveLeagueMatch, type ValveMatchDetails } from "../adapters/valveDota.js";
 import { AnalyticsService } from "../analytics/analyticsService.js";
 import { db, sqliteDb } from "../db/client.js";
-import { drafts, heroes, items, leagues, matchPlayers, matches, patches, players, rawApiPayloads } from "../db/schema.js";
+import { drafts, heroes, items, leagues, matchPlayers, matches, patches, players, rawApiPayloads, teams } from "../db/schema.js";
 import { config } from "../utils/config.js";
 import { buildAssetProxyUrl, defaultHeroIconPath, defaultHeroPortraitPath, defaultItemImagePath } from "../utils/assets.js";
 import { logger } from "../utils/logger.js";
@@ -186,9 +187,11 @@ export class DotaDataService {
         observerKills: matchPlayers.observerKills,
         campsStacked: matchPlayers.campsStacked,
         courierKills: matchPlayers.courierKills,
+        obsLogJson: matchPlayers.obsLogJson,
         goldTJson: matchPlayers.goldTJson,
         xpTJson: matchPlayers.xpTJson,
-        lhTJson: matchPlayers.lhTJson
+        lhTJson: matchPlayers.lhTJson,
+        durationSeconds: matches.durationSeconds
       })
       .from(matchPlayers)
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
@@ -255,6 +258,8 @@ export class DotaDataService {
         let mvpWins = 0;
         let laneWins = 0;
         let laneSamples = 0;
+        let observerActualLifetimeTotal = 0;
+        let observerPotentialLifetimeTotal = 0;
 
         for (const playerRow of playerRows) {
           if (playerRow.matchId == null) continue;
@@ -266,40 +271,58 @@ export class DotaDataService {
             }
           }
 
-          if (playerRow.laneRole == null || playerRow.isRadiant == null) continue;
-          const goldT = parseJsonValue<number[]>(playerRow.goldTJson, []);
-          const xpT = parseJsonValue<number[]>(playerRow.xpTJson, []);
-          const lhT = parseJsonValue<number[]>(playerRow.lhTJson, []);
-          const playerMinute = Math.min(goldT.length, xpT.length, lhT.length) - 1;
-          if (playerMinute < 8) continue;
-          const playerMinuteIndex = Math.min(9, playerMinute);
-          const playerLaneScore =
-            (goldT[playerMinuteIndex] ?? 0) + (xpT[playerMinuteIndex] ?? 0) + (lhT[playerMinuteIndex] ?? 0) * 35;
-          const opponents = participants.filter(
-            (entry) =>
-              entry.isRadiant !== playerRow.isRadiant &&
-              entry.laneRole != null &&
-              entry.laneRole === playerRow.laneRole
-          );
-          if (opponents.length === 0) continue;
-          const opponentScores = opponents
-            .map((entry) => {
-              const enemyGold = parseJsonValue<number[]>(entry.goldTJson, []);
-              const enemyXp = parseJsonValue<number[]>(entry.xpTJson, []);
-              const enemyLh = parseJsonValue<number[]>(entry.lhTJson, []);
-              const enemyMinute = Math.min(enemyGold.length, enemyXp.length, enemyLh.length) - 1;
-              if (enemyMinute < 8) return null;
-              const enemyMinuteIndex = Math.min(9, enemyMinute);
-              return (enemyGold[enemyMinuteIndex] ?? 0) + (enemyXp[enemyMinuteIndex] ?? 0) + (enemyLh[enemyMinuteIndex] ?? 0) * 35;
-            })
-            .filter((value): value is number => value !== null);
-          if (opponentScores.length === 0) continue;
-          laneSamples += 1;
-          const opponentAverage = opponentScores.reduce((sum, value) => sum + value, 0) / opponentScores.length;
-          if (playerLaneScore > opponentAverage) {
-            laneWins += 1;
+          if (playerRow.laneRole != null && playerRow.isRadiant != null) {
+            const goldT = parseJsonValue<number[]>(playerRow.goldTJson, []);
+            const xpT = parseJsonValue<number[]>(playerRow.xpTJson, []);
+            const lhT = parseJsonValue<number[]>(playerRow.lhTJson, []);
+            const playerMinute = Math.min(goldT.length, xpT.length, lhT.length) - 1;
+            if (playerMinute >= 8) {
+              const playerMinuteIndex = Math.min(9, playerMinute);
+              const playerLaneScore =
+                (goldT[playerMinuteIndex] ?? 0) + (xpT[playerMinuteIndex] ?? 0) + (lhT[playerMinuteIndex] ?? 0) * 35;
+              const opponents = participants.filter(
+                (entry) =>
+                  entry.isRadiant !== playerRow.isRadiant &&
+                  entry.laneRole != null &&
+                  entry.laneRole === playerRow.laneRole
+              );
+              if (opponents.length > 0) {
+                const opponentScores = opponents
+                  .map((entry) => {
+                    const enemyGold = parseJsonValue<number[]>(entry.goldTJson, []);
+                    const enemyXp = parseJsonValue<number[]>(entry.xpTJson, []);
+                    const enemyLh = parseJsonValue<number[]>(entry.lhTJson, []);
+                    const enemyMinute = Math.min(enemyGold.length, enemyXp.length, enemyLh.length) - 1;
+                    if (enemyMinute < 8) return null;
+                    const enemyMinuteIndex = Math.min(9, enemyMinute);
+                    return (enemyGold[enemyMinuteIndex] ?? 0) + (enemyXp[enemyMinuteIndex] ?? 0) + (enemyLh[enemyMinuteIndex] ?? 0) * 35;
+                  })
+                  .filter((value): value is number => value !== null);
+                if (opponentScores.length > 0) {
+                  laneSamples += 1;
+                  const opponentAverage = opponentScores.reduce((sum, value) => sum + value, 0) / opponentScores.length;
+                  if (playerLaneScore > opponentAverage) {
+                    laneWins += 1;
+                  }
+                }
+              }
+            }
+          }
+
+          if (playerRow.durationSeconds && playerRow.durationSeconds > 0) {
+            const efficiency = this.calculateObserverWardEfficiency(
+              playerRow.obsLogJson,
+              playerRow.durationSeconds
+            );
+            observerActualLifetimeTotal += efficiency.actualLifetimeTotal;
+            observerPotentialLifetimeTotal += efficiency.potentialLifetimeTotal;
           }
         }
+
+        const averageObserverLifetime =
+          observerPotentialLifetimeTotal > 0
+            ? (observerActualLifetimeTotal / observerPotentialLifetimeTotal) * 100
+            : 0;
 
         const stats: ComparisonStat[] = [
           stat("impact", "Impact", playerRows.length ? playerRows.reduce((sum, entry) => sum + this.impactScoreForRow(entry), 0) / playerRows.length : 0),
@@ -314,6 +337,7 @@ export class DotaDataService {
           stat("heroHealing", "Hero healing", Number(row?.avgHeroHealing ?? 0)),
           stat("towerDamage", "Tower damage", Number(row?.avgTowerDamage ?? 0)),
           stat("wardsPlaced", "Wards placed", Number(row?.avgObsPlaced ?? 0) + Number(row?.avgSenPlaced ?? 0)),
+          stat("wardEfficiency", "Ward efficiency %", averageObserverLifetime),
           stat("observerWardsDestroyed", "Observer wards destroyed", Number(row?.avgObserverKills ?? 0)),
           stat("campStacked", "Camp stacked", Number(row?.avgCampsStacked ?? 0)),
           stat("courierKills", "Courier kills", Number(row?.avgCourierKills ?? 0))
@@ -325,6 +349,80 @@ export class DotaDataService {
         ] as [number, ComparisonStat[]];
       })
     );
+  }
+
+  private calculateObserverWardEfficiency(
+    observerLogJson: string | null | undefined,
+    durationSeconds: number | null | undefined,
+    wardLifetimeSeconds = 360
+  ) {
+    if (!durationSeconds || durationSeconds <= 0) {
+      return { actualLifetimeTotal: 0, potentialLifetimeTotal: 0 };
+    }
+
+    const entries = parseJsonValue<
+      Array<{ time?: number; x?: number | null; y?: number | null; z?: number | null; action?: string | null }>
+    >(observerLogJson, [])
+      .filter((entry) => typeof entry.time === "number")
+      .sort((left, right) => (left.time ?? 0) - (right.time ?? 0));
+
+    const activeWards = new Map<string, number[]>();
+    const activeWardOrder: Array<{ key: string; time: number }> = [];
+    let actualLifetimeTotal = 0;
+    let potentialLifetimeTotal = 0;
+
+    for (const entry of entries) {
+      const time = entry.time ?? 0;
+      const key = `${Math.round(entry.x ?? -999)}-${Math.round(entry.y ?? -999)}`;
+      const action = (entry.action ?? "SPAWN").toUpperCase();
+      if (action === "DESPAWN") {
+        const spawnedAtEntries = activeWards.get(key) ?? [];
+        let spawnedAt = spawnedAtEntries.shift();
+        let matchedKey = key;
+        if (typeof spawnedAt === "number") {
+          const orderIndex = activeWardOrder.findIndex((entry) => entry.key === key && entry.time === spawnedAt);
+          if (orderIndex >= 0) {
+            activeWardOrder.splice(orderIndex, 1);
+          }
+        }
+        if (typeof spawnedAt !== "number") {
+          const fallback = activeWardOrder.shift();
+          if (fallback) {
+            matchedKey = fallback.key;
+            const fallbackEntries = activeWards.get(fallback.key) ?? [];
+            spawnedAt = fallbackEntries.shift();
+            if (fallbackEntries.length > 0) {
+              activeWards.set(fallback.key, fallbackEntries);
+            } else {
+              activeWards.delete(fallback.key);
+            }
+          }
+        }
+        if (typeof spawnedAt === "number") {
+          actualLifetimeTotal += Math.min(Math.max(0, time - spawnedAt), wardLifetimeSeconds);
+          potentialLifetimeTotal += Math.min(Math.max(0, durationSeconds - spawnedAt), wardLifetimeSeconds);
+        }
+        if (spawnedAtEntries.length > 0) {
+          activeWards.set(key, spawnedAtEntries);
+        } else {
+          activeWards.delete(matchedKey);
+        }
+      } else {
+        const current = activeWards.get(key) ?? [];
+        current.push(time);
+        activeWards.set(key, current);
+        activeWardOrder.push({ key, time });
+      }
+    }
+
+    for (const spawnedAtEntries of activeWards.values()) {
+      for (const spawnedAt of spawnedAtEntries) {
+        actualLifetimeTotal += Math.min(Math.max(0, durationSeconds - spawnedAt), wardLifetimeSeconds);
+        potentialLifetimeTotal += Math.min(Math.max(0, durationSeconds - spawnedAt), wardLifetimeSeconds);
+      }
+    }
+
+    return { actualLifetimeTotal, potentialLifetimeTotal };
   }
 
   private getQueueLabel(gameMode: number | null | undefined, lobbyType?: number | null | undefined) {
@@ -1237,36 +1335,16 @@ export class DotaDataService {
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .where(scopedPlayerCondition);
 
-    const observerLifetimeSamples: number[] = [];
+    let observerActualLifetimeTotal = 0;
+    let observerPotentialLifetimeTotal = 0;
     for (const row of observerLifetimeRows) {
-      if (!row.durationSeconds || row.durationSeconds <= 0) continue;
-      const entries = parseJsonValue<Array<{ time?: number; x?: number | null; y?: number | null; z?: number | null; action?: string | null }>>(
-        row.observerLogJson,
-        []
-      )
-        .filter((entry) => typeof entry.time === "number")
-        .sort((left, right) => (left.time ?? 0) - (right.time ?? 0));
-      const activeWards = new Map<string, number>();
-      for (const entry of entries) {
-        const key = `${Math.round(entry.x ?? -999)}-${Math.round(entry.y ?? -999)}-${Math.round(entry.z ?? -999)}`;
-        const action = (entry.action ?? "SPAWN").toUpperCase();
-        if (action === "DESPAWN") {
-          const spawnedAt = activeWards.get(key);
-          if (typeof spawnedAt === "number") {
-            observerLifetimeSamples.push(Math.max(0, ((entry.time ?? spawnedAt) - spawnedAt) / row.durationSeconds) * 100);
-            activeWards.delete(key);
-          }
-        } else {
-          activeWards.set(key, entry.time ?? 0);
-        }
-      }
-      for (const spawnedAt of activeWards.values()) {
-        observerLifetimeSamples.push(Math.max(0, (row.durationSeconds - spawnedAt) / row.durationSeconds) * 100);
-      }
+      const efficiency = this.calculateObserverWardEfficiency(row.observerLogJson, row.durationSeconds);
+      observerActualLifetimeTotal += efficiency.actualLifetimeTotal;
+      observerPotentialLifetimeTotal += efficiency.potentialLifetimeTotal;
     }
     const averageObserverWardLifetimePercent =
-      observerLifetimeSamples.length > 0
-        ? Number((observerLifetimeSamples.reduce((sum, value) => sum + value, 0) / observerLifetimeSamples.length).toFixed(1))
+      observerPotentialLifetimeTotal > 0
+        ? Number(((observerActualLifetimeTotal / observerPotentialLifetimeTotal) * 100).toFixed(1))
         : null;
 
     const historySyncedAt = await this.getLatestRawPayloadFetchedAt("player_match_history", String(playerId));
@@ -2724,6 +2802,38 @@ export class DotaDataService {
       .map((item) => ({ ...item, cost: itemCosts.get(item.itemId) ?? null }))
       .filter((item) => (item.cost ?? 0) >= 1500);
 
+    const leagueTeams = sqliteDb
+      .prepare(
+        `
+          with team_rows as (
+            select m.radiant_team_id as team_id, case when m.radiant_win = 1 then 1 else 0 end as won
+            from matches m
+            where m.league_id = ? and m.radiant_team_id is not null and m.radiant_team_id > 0
+            union all
+            select m.dire_team_id as team_id, case when m.radiant_win = 0 then 1 else 0 end as won
+            from matches m
+            where m.league_id = ? and m.dire_team_id is not null and m.dire_team_id > 0
+          )
+          select
+            t.id as teamId,
+            t.name as teamName,
+            t.tag as teamTag,
+            count(*) as games,
+            sum(case when tr.won = 1 then 1 else 0 end) as wins
+          from team_rows tr
+          join teams t on t.id = tr.team_id
+          group by t.id, t.name, t.tag
+          order by games desc, wins desc, t.name asc
+        `
+      )
+      .all(leagueId, leagueId) as Array<{
+      teamId: number;
+      teamName: string;
+      teamTag: string | null;
+      games: number;
+      wins: number | null;
+    }>;
+
     const heroRows = leagueHeroes.map((hero) => {
       const wins = hero.wins ?? 0;
       const losses = Math.max(0, hero.games - wins);
@@ -2786,6 +2896,19 @@ export class DotaDataService {
             : null,
       uniquePlayers: summary?.uniquePlayers ?? 0,
       uniqueHeroes: summary?.uniqueHeroes ?? 0,
+      teams: leagueTeams.map((team) => {
+        const wins = team.wins ?? 0;
+        const losses = Math.max(0, team.games - wins);
+        return {
+          teamId: team.teamId,
+          name: team.teamName,
+          tag: team.teamTag,
+          games: team.games,
+          wins,
+          losses,
+          winrate: team.games ? Number(((wins / team.games) * 100).toFixed(1)) : 0
+        };
+      }),
       topHeroes: heroRows.slice(0, 12).map((hero) => ({
         heroId: hero.heroId,
         heroName: hero.heroName,
@@ -2854,11 +2977,309 @@ export class DotaDataService {
     };
   }
 
+  async getLeagueTeamOverview(leagueId: number, teamId: number): Promise<TeamOverview> {
+    await this.ensureReferenceData();
+    const leagueOverview = await this.getLeagueOverview(leagueId);
+    const team = leagueOverview.teams.find((entry) => entry.teamId === teamId);
+    if (!team) {
+      throw new Error("Team not found in the local dataset for this league.");
+    }
+
+    const exactTeamMatches = await db
+      .select({
+        matchId: matches.id,
+        radiantTeamId: matches.radiantTeamId,
+        direTeamId: matches.direTeamId
+      })
+      .from(matches)
+      .where(
+        and(
+          eq(matches.leagueId, leagueId),
+          sql`(${matches.radiantTeamId} = ${teamId} or ${matches.direTeamId} = ${teamId})`
+        )
+      );
+
+    const teamSideByMatchId = new Map<number, boolean>();
+    for (const match of exactTeamMatches) {
+      if (match.radiantTeamId === teamId) {
+        teamSideByMatchId.set(match.matchId, true);
+      } else if (match.direTeamId === teamId) {
+        teamSideByMatchId.set(match.matchId, false);
+      }
+    }
+
+    const coreRosterRows =
+      exactTeamMatches.length > 0
+        ? await db
+            .select({
+              matchId: matchPlayers.matchId,
+              playerId: matchPlayers.playerId,
+              isRadiant: matchPlayers.isRadiant
+            })
+            .from(matchPlayers)
+            .where(inArray(matchPlayers.matchId, exactTeamMatches.map((match) => match.matchId)))
+        : [];
+    const coreRosterPlayerIds = new Set(
+      coreRosterRows
+        .filter((row) => row.playerId !== null && teamSideByMatchId.get(row.matchId) === row.isRadiant)
+        .map((row) => row.playerId as number)
+    );
+
+    const possibleTeamlessRows =
+      coreRosterPlayerIds.size > 0
+        ? await db
+            .select({
+              matchId: matches.id,
+              playerId: matchPlayers.playerId,
+              isRadiant: matchPlayers.isRadiant,
+              radiantTeamId: matches.radiantTeamId,
+              direTeamId: matches.direTeamId
+            })
+            .from(matchPlayers)
+            .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+            .where(eq(matches.leagueId, leagueId))
+        : [];
+
+    const teamlessSideMap = new Map<string, { matchId: number; isRadiant: boolean; overlap: number }>();
+    for (const row of possibleTeamlessRows) {
+      if (row.playerId === null || row.matchId === null) continue;
+      const sideIsTeamless =
+        row.isRadiant ? row.radiantTeamId === null : row.direTeamId === null;
+      if (!sideIsTeamless) continue;
+      const key = `${row.matchId}:${row.isRadiant ? "radiant" : "dire"}`;
+      const current = teamlessSideMap.get(key) ?? { matchId: row.matchId, isRadiant: row.isRadiant ?? false, overlap: 0 };
+      if (coreRosterPlayerIds.has(row.playerId)) {
+        current.overlap += 1;
+      }
+      teamlessSideMap.set(key, current);
+    }
+
+    for (const candidate of teamlessSideMap.values()) {
+      if (candidate.overlap >= 3 && !teamSideByMatchId.has(candidate.matchId)) {
+        teamSideByMatchId.set(candidate.matchId, candidate.isRadiant);
+      }
+    }
+
+    const scopedMatchIds = [...teamSideByMatchId.keys()];
+    if (scopedMatchIds.length === 0) {
+      throw new Error("No matches stored for this team yet.");
+    }
+
+    const parsedData = await this.getMatchParsedDataMap(scopedMatchIds);
+
+    const scopedPlayerRows = await db
+      .select({
+        matchId: matchPlayers.matchId,
+        playerId: matchPlayers.playerId,
+        personaname: players.personaname,
+        avatar: players.avatar,
+        heroId: matchPlayers.heroId,
+        heroInternalName: heroes.name,
+        heroName: heroes.localizedName,
+        heroIconPath: heroes.iconPath,
+        win: matchPlayers.win,
+        isRadiant: matchPlayers.isRadiant
+      })
+      .from(matchPlayers)
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
+      .where(inArray(matchPlayers.matchId, scopedMatchIds));
+
+    const teamParticipantRows = scopedPlayerRows.filter(
+      (row) => teamSideByMatchId.get(row.matchId) === row.isRadiant
+    );
+
+    const matchMetaRows = await db
+      .select({
+        matchId: matches.id,
+        startTime: matches.startTime,
+        durationSeconds: matches.durationSeconds,
+        radiantWin: matches.radiantWin,
+        radiantScore: matches.radiantScore,
+        direScore: matches.direScore,
+        patch: patches.name,
+        radiantTeamId: matches.radiantTeamId,
+        direTeamId: matches.direTeamId
+      })
+      .from(matches)
+      .leftJoin(patches, eq(patches.id, matches.patchId))
+      .where(inArray(matches.id, scopedMatchIds))
+      .orderBy(desc(matches.startTime));
+
+    const allTeamIds = [...new Set(
+      matchMetaRows.flatMap((row) => [row.radiantTeamId, row.direTeamId]).filter((value): value is number => value !== null)
+    )];
+    const teamNameRows =
+      allTeamIds.length > 0
+        ? await db.select({ id: teams.id, name: teams.name }).from(teams).where(inArray(teams.id, allTeamIds))
+        : [];
+    const teamNameMap = new Map(teamNameRows.map((row) => [row.id, row.name]));
+
+    const uniquePlayers = new Set(teamParticipantRows.map((row) => row.playerId).filter((value): value is number => value !== null));
+    const uniqueHeroes = new Set(teamParticipantRows.map((row) => row.heroId).filter((value): value is number => value !== null));
+    const playerMap = new Map<
+      number | string,
+      {
+        playerId: number | null;
+        personaname: string | null;
+        avatar: string | null;
+        games: number;
+        wins: number;
+        uniqueHeroes: Set<number>;
+      }
+    >();
+    const heroMap = new Map<
+      number,
+      {
+        heroId: number;
+        heroName: string;
+        heroIconUrl: string | null;
+        games: number;
+        wins: number;
+      }
+    >();
+
+    for (const row of teamParticipantRows) {
+      const playerKey = row.playerId ?? `anon-${row.personaname ?? "unknown"}`;
+      const currentPlayer =
+        playerMap.get(playerKey) ??
+        {
+          playerId: row.playerId,
+          personaname: row.personaname,
+          avatar: row.avatar,
+          games: 0,
+          wins: 0,
+          uniqueHeroes: new Set<number>()
+        };
+      currentPlayer.games += 1;
+      if (row.win === true) currentPlayer.wins += 1;
+      if (row.heroId !== null) currentPlayer.uniqueHeroes.add(row.heroId);
+      playerMap.set(playerKey, currentPlayer);
+
+      if (row.heroId !== null) {
+        const currentHero =
+          heroMap.get(row.heroId) ??
+          {
+            heroId: row.heroId,
+            heroName: row.heroName ?? `Hero ${row.heroId}`,
+            heroIconUrl: buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroInternalName)),
+            games: 0,
+            wins: 0
+          };
+        currentHero.games += 1;
+        if (row.win === true) currentHero.wins += 1;
+        heroMap.set(row.heroId, currentHero);
+      }
+    }
+
+    const playerIds = [...uniquePlayers];
+    const comparisonStatsMap =
+      playerIds.length > 0
+        ? await this.buildComparisonStatsMap(
+            playerIds,
+            and(inArray(matchPlayers.matchId, scopedMatchIds), inArray(matchPlayers.playerId, playerIds))
+          )
+        : new Map<number, Array<{ key: string; label: string; value: number; higherIsBetter: boolean }>>();
+
+    return {
+      leagueId,
+      leagueName: leagueOverview.name,
+      teamId: team.teamId,
+      name: team.name,
+      tag: team.tag,
+      games: matchMetaRows.length,
+      wins: matchMetaRows.filter((match) => {
+        const isRadiantTeam = teamSideByMatchId.get(match.matchId);
+        return match.radiantWin !== null && isRadiantTeam !== undefined && (isRadiantTeam ? match.radiantWin : !match.radiantWin);
+      }).length,
+      losses: matchMetaRows.filter((match) => {
+        const isRadiantTeam = teamSideByMatchId.get(match.matchId);
+        return match.radiantWin !== null && isRadiantTeam !== undefined && (isRadiantTeam ? !match.radiantWin : match.radiantWin);
+      }).length,
+      winrate:
+        matchMetaRows.length > 0
+          ? Number(
+              (
+                (matchMetaRows.filter((match) => {
+                  const isRadiantTeam = teamSideByMatchId.get(match.matchId);
+                  return match.radiantWin !== null && isRadiantTeam !== undefined && (isRadiantTeam ? match.radiantWin : !match.radiantWin);
+                }).length /
+                  matchMetaRows.length) *
+                100
+              ).toFixed(1)
+            )
+          : 0,
+      firstMatchTime: matchMetaRows.at(-1)?.startTime?.getTime() ?? null,
+      lastMatchTime: matchMetaRows[0]?.startTime?.getTime() ?? null,
+      uniquePlayers: uniquePlayers.size,
+      uniqueHeroes: uniqueHeroes.size,
+      topHeroes: [...heroMap.values()]
+        .sort((left, right) => right.games - left.games || right.wins - left.wins || left.heroName.localeCompare(right.heroName))
+        .slice(0, 12)
+        .map((hero) => {
+        const losses = Math.max(0, hero.games - hero.wins);
+        return {
+          heroId: hero.heroId,
+          heroName: hero.heroName,
+          heroIconUrl: hero.heroIconUrl,
+          games: hero.games,
+          wins: hero.wins,
+          losses,
+          winrate: hero.games ? Number(((hero.wins / hero.games) * 100).toFixed(1)) : 0
+        };
+      }),
+      players: [...playerMap.values()]
+        .sort((left, right) => right.games - left.games || right.wins - left.wins || (left.personaname ?? "").localeCompare(right.personaname ?? ""))
+        .map((player) => {
+        const losses = Math.max(0, player.games - player.wins);
+        return {
+          playerId: player.playerId,
+          personaname: player.personaname,
+          avatar: player.avatar,
+          games: player.games,
+          wins: player.wins,
+          losses,
+          winrate: player.games ? Number(((player.wins / player.games) * 100).toFixed(1)) : 0,
+          uniqueHeroes: player.uniqueHeroes.size,
+          comparisonStats: player.playerId ? comparisonStatsMap.get(player.playerId) ?? [] : []
+        };
+      }),
+      matches: matchMetaRows.map((match) => {
+        const isRadiantTeam = teamSideByMatchId.get(match.matchId) ?? false;
+        const teamWin =
+          match.radiantWin === null ? null : isRadiantTeam ? match.radiantWin : !match.radiantWin;
+        const opponentName =
+          isRadiantTeam
+            ? match.direTeamId ? teamNameMap.get(match.direTeamId) ?? null : null
+            : match.radiantTeamId ? teamNameMap.get(match.radiantTeamId) ?? null : null;
+        const teamScore = isRadiantTeam ? match.radiantScore : match.direScore;
+        const opponentScore = isRadiantTeam ? match.direScore : match.radiantScore;
+        return {
+          matchId: match.matchId,
+          startTime: match.startTime?.getTime() ?? null,
+          durationSeconds: match.durationSeconds,
+          teamWin,
+          opponentName,
+          teamScore,
+          opponentScore,
+          patch: match.patch ?? null,
+          parsedData: parsedData.get(match.matchId) ?? {
+            label: "Basic",
+            hasFullMatchPayload: false,
+            timelines: false,
+            itemTimings: false,
+            vision: false
+          }
+        };
+      })
+    };
+  }
+
   async syncLeagueMatches(leagueId: number, options?: { limit?: number }): Promise<LeagueSyncResponse> {
     await this.ensureReferenceData();
     const adapter = await this.createOpenDotaAdapter();
     const limit = Math.min(100, Math.max(1, options?.limit ?? 25));
-    const settings = await this.settingsService.getSettings();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
     const savedLeague = settings.savedLeagues.find((league) => league.leagueId === leagueId);
     const providerMessages: string[] = [];
 
@@ -2961,13 +3382,19 @@ export class DotaDataService {
         set: { name: leagueName }
       });
 
-    const existingMatches = new Set(
-      (
-        await db
-          .select({ id: matches.id })
-          .from(matches)
-          .where(inArray(matches.id, candidates.map((match) => match.match_id).filter(Number.isInteger)))
-      ).map((row) => row.id)
+    const existingMatchRows = await db
+      .select({
+        id: matches.id,
+        radiantTeamId: matches.radiantTeamId,
+        direTeamId: matches.direTeamId
+      })
+      .from(matches)
+      .where(inArray(matches.id, candidates.map((match) => match.match_id).filter(Number.isInteger)));
+    const existingMatches = new Set(existingMatchRows.map((row) => row.id));
+    const teamlessExistingMatches = new Set(
+      existingMatchRows
+        .filter((row) => row.radiantTeamId === null || row.direTeamId === null)
+        .map((row) => row.id)
     );
 
     const sortedCandidates = candidates
@@ -2978,7 +3405,9 @@ export class DotaDataService {
       await db.update(matches).set({ leagueId, updatedAt: new Date() }).where(inArray(matches.id, candidateIds));
     }
 
-    const toFetch = sortedCandidates.filter((match) => !existingMatches.has(match.match_id)).slice(0, limit);
+    const toFetch = sortedCandidates
+      .filter((match) => !existingMatches.has(match.match_id) || teamlessExistingMatches.has(match.match_id))
+      .slice(0, limit);
     let fetchedMatches = 0;
     const failedMatches: Array<{ matchId: number; message: string }> = [];
 
@@ -3287,6 +3716,41 @@ export class DotaDataService {
     payload: Awaited<ReturnType<OpenDotaAdapter["getMatch"]>>["payload"],
     fetchedAt: number
   ) {
+    const radiantTeamId =
+      payload.radiant_team?.team_id ??
+      payload.radiant_team_id ??
+      null;
+    const direTeamId =
+      payload.dire_team?.team_id ??
+      payload.dire_team_id ??
+      null;
+    const upsertTeam = async (
+      teamId: number | null,
+      teamName: string | null | undefined,
+      tag: string | null | undefined
+    ) => {
+      if (!teamId || !Number.isInteger(teamId) || teamId <= 0 || !teamName?.trim()) return;
+      await database
+        .insert(teams)
+        .values({
+          id: teamId,
+          name: teamName.trim(),
+          tag: tag?.trim() || null,
+          updatedAt: new Date()
+        })
+        .onConflictDoUpdate({
+          target: teams.id,
+          set: {
+            name: teamName.trim(),
+            tag: tag?.trim() || null,
+            updatedAt: new Date()
+          }
+        });
+    };
+
+    await upsertTeam(radiantTeamId, payload.radiant_team?.name ?? payload.radiant_name ?? null, payload.radiant_team?.tag ?? null);
+    await upsertTeam(direTeamId, payload.dire_team?.name ?? payload.dire_name ?? null, payload.dire_team?.tag ?? null);
+
     const referencedHeroIds = [
       ...(payload.picks_bans ?? []).map((draftEvent) => draftEvent.hero_id),
       ...(payload.players ?? []).map((player) => player.hero_id ?? null)
@@ -3314,6 +3778,8 @@ export class DotaDataService {
         direScore: payload.dire_score ?? null,
         patchId: payload.patch ?? null,
         leagueId: payload.leagueid ?? null,
+        radiantTeamId,
+        direTeamId,
         lastFetchedAt: new Date(fetchedAt),
         updatedAt: new Date()
       })
@@ -3327,6 +3793,8 @@ export class DotaDataService {
           direScore: payload.dire_score ?? null,
           patchId: payload.patch ?? null,
           leagueId: payload.leagueid ?? null,
+          radiantTeamId,
+          direTeamId,
           lastFetchedAt: new Date(fetchedAt),
           updatedAt: new Date()
         }

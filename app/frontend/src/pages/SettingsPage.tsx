@@ -4,6 +4,7 @@ import {
   apiPost,
   clearStoredAdminPassword,
   getSessionColorblindModeOverride,
+  getSessionDarkModeOverride,
   getSessionPatchScopeOverride,
   getLocalAutoRefreshPlayerIdsOverride,
   getLocalPrimaryPlayerIdOverride,
@@ -11,6 +12,7 @@ import {
   setLocalAutoRefreshPlayerIdsOverride,
   setLocalPrimaryPlayerIdOverride,
   setSessionColorblindModeOverride,
+  setSessionDarkModeOverride,
   setSessionPatchScopeOverride,
   storeAdminPassword
 } from "../api/client";
@@ -68,6 +70,7 @@ export function SettingsPage() {
   const [limitToRecentPatches, setLimitToRecentPatches] = useState(true);
   const [recentPatchCount, setRecentPatchCount] = useState("2");
   const [colorblindMode, setColorblindMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
   const [stratzPerSecondCap, setStratzPerSecondCap] = useState("20");
   const [stratzPerMinuteCap, setStratzPerMinuteCap] = useState("250");
   const [stratzPerHourCap, setStratzPerHourCap] = useState("2000");
@@ -98,6 +101,7 @@ export function SettingsPage() {
     if (query.data) {
       const sessionPatchOverride = getSessionPatchScopeOverride();
       const sessionColorblindOverride = getSessionColorblindModeOverride();
+      const sessionDarkModeOverride = getSessionDarkModeOverride();
       const localPrimaryPlayerId = getLocalPrimaryPlayerIdOverride();
       const localAutoRefreshPlayerIds = getLocalAutoRefreshPlayerIdsOverride();
       setOpenDotaApiKey(query.data.openDotaApiKey ?? "");
@@ -108,6 +112,7 @@ export function SettingsPage() {
       setLimitToRecentPatches(sessionPatchOverride.limitToRecentPatches ?? query.data.limitToRecentPatches);
       setRecentPatchCount(String(sessionPatchOverride.recentPatchCount ?? query.data.recentPatchCount));
       setColorblindMode(sessionColorblindOverride ?? query.data.colorblindMode);
+      setDarkMode(sessionDarkModeOverride ?? query.data.darkMode);
       setStratzPerSecondCap(String(query.data.stratzPerSecondCap));
       setStratzPerMinuteCap(String(query.data.stratzPerMinuteCap));
       setStratzPerHourCap(String(query.data.stratzPerHourCap));
@@ -296,6 +301,7 @@ export function SettingsPage() {
                 recentPatchCount: parsedRecentPatchCount
               });
               setSessionColorblindModeOverride(colorblindMode);
+              setSessionDarkModeOverride(darkMode);
               void queryClient.invalidateQueries({ queryKey: ["settings"] });
               void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
               void queryClient.invalidateQueries({ queryKey: ["player"] });
@@ -316,6 +322,7 @@ export function SettingsPage() {
               recentPatchCount: parsedRecentPatchCount,
               autoRefreshPlayerIds: query.data?.autoRefreshPlayerIds ?? [],
               colorblindMode,
+              darkMode,
               stratzPerSecondCap: parsedStratzPerSecondCap,
               stratzPerMinuteCap: parsedStratzPerMinuteCap,
               stratzPerHourCap: parsedStratzPerHourCap,
@@ -525,8 +532,20 @@ export function SettingsPage() {
                 />
                 <span>Colorblind mode</span>
               </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  disabled={!canManageSessionPreferences}
+                  checked={darkMode}
+                  onChange={(event) => setDarkMode(event.target.checked)}
+                />
+                <span>Dark mode</span>
+              </label>
               <p className="muted-inline">
                 Adjusts win/loss, team, and timeline colors to a palette that is easier to distinguish without red-green dependence.
+              </p>
+              <p className="muted-inline">
+                Switches the interface to a darker palette. In locked mode, this applies only to the current browser session.
               </p>
             </div>
           ) : null}

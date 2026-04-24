@@ -16,7 +16,8 @@ type MatchSortKey = "match" | "start" | "duration" | "outcome" | "score" | "patc
 type HeroSortKey = "hero" | "games" | "wins" | "losses" | "winrate" | "players";
 type PlayerSortKey = "player" | "games" | "wins" | "losses" | "winrate" | "heroes";
 type ItemSortKey = "item" | "games" | "wins" | "losses" | "winrate";
-type LeagueTab = "heroes" | "players" | "items" | "matches";
+type TeamSortKey = "team" | "games" | "wins" | "losses" | "winrate";
+type LeagueTab = "heroes" | "players" | "teams" | "items" | "matches";
 
 function ParsedDataPill({ label }: { label: string }) {
   return <span className={`parsed-data-pill ${label === "Full" ? "rich" : "basic"}`}>{label}</span>;
@@ -47,12 +48,17 @@ export function LeagueDetailPage() {
     key: "games",
     direction: "desc"
   });
+  const [teamSort, setTeamSort] = useState<{ key: TeamSortKey; direction: "asc" | "desc" }>({
+    key: "games",
+    direction: "desc"
+  });
   const [selectedHeroId, setSelectedHeroId] = useState<number | null>(null);
   const [showSparseItems, setShowSparseItems] = useState(false);
   const [activeTab, setActiveTab] = useState<LeagueTab>("matches");
   const [heroSearch, setHeroSearch] = useState("");
   const [playerSearch, setPlayerSearch] = useState("");
   const [itemSearch, setItemSearch] = useState("");
+  const [teamSearch, setTeamSearch] = useState("");
   const [matchSearch, setMatchSearch] = useState("");
 
   function toggleSort<T extends string>(key: T, setter: Dispatch<SetStateAction<{ key: T; direction: "asc" | "desc" }>>) {
@@ -160,6 +166,39 @@ export function LeagueDetailPage() {
     return rows;
   }, [itemSearch, itemSort, query.data?.items, showSparseItems]);
 
+  const sortedTeams = useMemo(() => {
+    const needle = teamSearch.trim().toLowerCase();
+    const rows = [...(query.data?.teams ?? [])].filter(
+      (team) =>
+        !needle ||
+        team.name.toLowerCase().includes(needle) ||
+        (team.tag ?? "").toLowerCase().includes(needle)
+    );
+    rows.sort((left, right) => {
+      let compare = 0;
+      switch (teamSort.key) {
+        case "team":
+          compare = left.name.localeCompare(right.name);
+          break;
+        case "wins":
+          compare = left.wins - right.wins;
+          break;
+        case "losses":
+          compare = left.losses - right.losses;
+          break;
+        case "winrate":
+          compare = left.winrate - right.winrate;
+          break;
+        case "games":
+        default:
+          compare = left.games - right.games;
+          break;
+      }
+      return teamSort.direction === "asc" ? compare : -compare;
+    });
+    return rows;
+  }, [query.data?.teams, teamSearch, teamSort]);
+
   const selectedHero = useMemo(
     () => query.data?.heroes.find((hero) => hero.heroId === selectedHeroId) ?? null,
     [query.data?.heroes, selectedHeroId]
@@ -263,6 +302,8 @@ export function LeagueDetailPage() {
   const pagedPlayers = playerPagination.paged(sortedPlayers);
   const itemPagination = usePagination(sortedItems.length, 20, [20, 50, 100]);
   const pagedItems = itemPagination.paged(sortedItems);
+  const teamPagination = usePagination(sortedTeams.length, 20, [20, 50, 100]);
+  const pagedTeams = teamPagination.paged(sortedTeams);
   const sparseItemCount = (query.data?.items ?? []).filter((item) => item.games < 10).length;
   const heroPlayerPagination = usePagination(selectedHeroPlayers.length, 20, [20, 50, 100]);
   const pagedHeroPlayers = heroPlayerPagination.paged(selectedHeroPlayers);
@@ -327,6 +368,7 @@ export function LeagueDetailPage() {
               { label: "Full parsed", value: formatNumber(query.data.parsedFullMatches) },
               { label: "Players", value: formatNumber(query.data.uniquePlayers) },
               { label: "Heroes", value: formatNumber(query.data.uniqueHeroes) },
+              { label: "Teams", value: formatNumber(query.data.teams.length) },
               { label: "First match", value: formatDate(query.data.firstMatchTime) },
               { label: "Latest match", value: formatDate(query.data.lastMatchTime) }
             ]}
@@ -337,11 +379,12 @@ export function LeagueDetailPage() {
               ["matches", "Matches"],
               ["heroes", "Heroes"],
               ["players", "Players"],
+              ...(query.data.teams.length > 0 ? ([["teams", "Teams"]] as Array<[string, string]>) : []),
               ["items", "Items"]
             ].map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
+                <button
+                  key={key}
+                  type="button"
                 className={`settings-tab ${activeTab === key ? "active" : ""}`}
                 onClick={() => setActiveTab(key as LeagueTab)}
               >
@@ -532,6 +575,62 @@ export function LeagueDetailPage() {
                 ]}
               />
             </TableCard>
+            ) : null}
+
+          {activeTab === "teams" ? (
+          <TableCard
+            title="Teams"
+            rowCount={pagedTeams.length}
+            totalItems={sortedTeams.length}
+            page={teamPagination.page}
+            totalPages={teamPagination.totalPages}
+            pageSize={teamPagination.pageSize}
+            pageSizeOptions={teamPagination.pageSizeOptions}
+            onPreviousPage={teamPagination.previousPage}
+            onNextPage={teamPagination.nextPage}
+            onPageSizeChange={teamPagination.setPageSize}
+            extra={
+              <div className="table-controls">
+                <label>
+                  Search
+                  <input
+                    type="search"
+                    value={teamSearch}
+                    onChange={(event) => {
+                      setTeamSearch(event.target.value);
+                      teamPagination.resetPage();
+                    }}
+                    placeholder="Team"
+                  />
+                </label>
+              </div>
+            }
+            empty={<EmptyState label="No team data stored for this league yet." />}
+          >
+            <DataTable
+              rows={pagedTeams}
+              getRowKey={(team) => String(team.teamId)}
+              sortState={teamSort}
+              onSortChange={(key) => toggleSort(key as TeamSortKey, setTeamSort)}
+              columns={[
+                {
+                  key: "team",
+                  header: "Team",
+                  sortable: true,
+                  cell: (team) => (
+                    <Link to={`/leagues/${leagueId}/teams/${team.teamId}`}>
+                      {team.name}
+                      {team.tag ? <span className="muted-inline"> ({team.tag})</span> : null}
+                    </Link>
+                  )
+                },
+                { key: "games", header: "Games", sortable: true, cell: (team) => formatNumber(team.games) },
+                { key: "wins", header: "Wins", sortable: true, cell: (team) => formatNumber(team.wins) },
+                { key: "losses", header: "Losses", sortable: true, cell: (team) => formatNumber(team.losses) },
+                { key: "winrate", header: "Win %", sortable: true, cell: (team) => `${team.winrate}%` }
+              ]}
+            />
+          </TableCard>
           ) : null}
 
           {activeTab === "items" ? (

@@ -61,6 +61,12 @@ export interface OpenDotaMatchResponse {
   patch?: number;
   leagueid?: number;
   league_name?: string;
+  radiant_team?: { team_id?: number; name?: string; tag?: string } | null;
+  dire_team?: { team_id?: number; name?: string; tag?: string } | null;
+  radiant_name?: string;
+  dire_name?: string;
+  radiant_team_id?: number;
+  dire_team_id?: number;
   players?: Array<{
     account_id?: number;
     personaname?: string;

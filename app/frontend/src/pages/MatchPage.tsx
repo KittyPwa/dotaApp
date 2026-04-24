@@ -952,24 +952,58 @@ function getTimelineWardPlacementCount(
   entries: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>,
   second: number
 ) {
-  return entries.filter((entry) => entry.time <= second && (entry.action ?? "SPAWN").toUpperCase() !== "DESPAWN").length;
+  return entries.filter((entry) => entry.time <= second && !isWardRemovalAction(entry.action)).length;
 }
 
-type WardTimelineEntry = { time: number; x: number | null; y: number | null; z: number | null; action?: string | null };
+type WardTimelineEntry = {
+  time: number;
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  action?: string | null;
+  playerKey?: string;
+  kind?: string;
+};
+
+function isWardRemovalAction(action?: string | null) {
+  const normalized = (action ?? "SPAWN").toUpperCase();
+  return normalized === "DESPAWN" || normalized === "DESTROY" || normalized === "DEATH" || normalized === "KILL";
+}
+
+function hasReliableWardState(entries: WardTimelineEntry[]) {
+  const placementCount = entries.filter((entry) => !isWardRemovalAction(entry.action)).length;
+  if (placementCount === 0) return false;
+  return entries.some((entry) => isWardRemovalAction(entry.action));
+}
+
+function getWardLifetimeSeconds(entry: WardTimelineEntry) {
+  return entry.kind === "sentry" ? 420 : 360;
+}
 
 function getWardCoordinateKey(entry: { x: number | null; y: number | null; z: number | null }) {
   return `${Math.round(entry.x ?? -999)}-${Math.round(entry.y ?? -999)}`;
 }
 
 function findMatchingWardIndex<T extends WardTimelineEntry>(active: T[], target: WardTimelineEntry) {
+  const scopedActive =
+    target.playerKey || target.kind
+      ? active
+          .map((entry, index) => ({ entry, index }))
+          .filter(
+            ({ entry }) =>
+              (!target.playerKey || entry.playerKey === target.playerKey) &&
+              (!target.kind || entry.kind === target.kind)
+          )
+      : active.map((entry, index) => ({ entry, index }));
+  const candidateEntries = scopedActive.length > 0 ? scopedActive : active.map((entry, index) => ({ entry, index }));
+
   const exactKey = getWardCoordinateKey(target);
-  const exactIndex = active.findIndex((entry) => getWardCoordinateKey(entry) === exactKey);
-  if (exactIndex >= 0) return exactIndex;
+  const exactMatch = candidateEntries.find(({ entry }) => getWardCoordinateKey(entry) === exactKey);
+  if (exactMatch) return exactMatch.index;
 
   let bestIndex = -1;
   let bestDistance = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < active.length; index += 1) {
-    const entry = active[index];
+  for (const { entry, index } of candidateEntries) {
     if (entry.x === null || entry.y === null || target.x === null || target.y === null) continue;
     const distance = Math.hypot(entry.x - target.x, entry.y - target.y);
     if (distance < bestDistance) {
@@ -977,7 +1011,8 @@ function findMatchingWardIndex<T extends WardTimelineEntry>(active: T[], target:
       bestIndex = index;
     }
   }
-  return bestDistance <= 450 ? bestIndex : -1;
+  if (bestDistance <= 450) return bestIndex;
+  return candidateEntries[0]?.index ?? -1;
 }
 
 function buildWardTimelineState<T extends WardTimelineEntry>(entries: T[], second: number) {
@@ -987,8 +1022,7 @@ function buildWardTimelineState<T extends WardTimelineEntry>(entries: T[], secon
   const sortedEntries = [...entries].sort((left, right) => left.time - right.time);
   for (const entry of sortedEntries) {
     if (entry.time > second) break;
-    const action = (entry.action ?? "SPAWN").toUpperCase();
-    if (action === "DESPAWN") {
+    if (isWardRemovalAction(entry.action)) {
       const matchIndex = findMatchingWardIndex(active, entry);
       if (matchIndex >= 0) {
         const [matchedWard] = active.splice(matchIndex, 1);
@@ -999,7 +1033,17 @@ function buildWardTimelineState<T extends WardTimelineEntry>(entries: T[], secon
       active.push(entry);
     }
   }
-  return { placed, active, completedLifetimes };
+  const stillActive: T[] = [];
+  for (const entry of active) {
+    const elapsed = Math.max(0, second - entry.time);
+    const lifetime = getWardLifetimeSeconds(entry);
+    if (elapsed >= lifetime) {
+      completedLifetimes.push(lifetime);
+    } else {
+      stillActive.push(entry);
+    }
+  }
+  return { placed, active: stillActive, completedLifetimes };
 }
 
 function getWardPlacementsPerMinute(
@@ -1008,7 +1052,7 @@ function getWardPlacementsPerMinute(
 ) {
   const values = Array.from({ length: maxMinute + 1 }, () => 0);
   for (const entry of entries) {
-    if ((entry.action ?? "SPAWN").toUpperCase() === "DESPAWN") continue;
+    if (isWardRemovalAction(entry.action)) continue;
     const minute = Math.max(0, Math.min(maxMinute, Math.floor(entry.time / 60)));
     values[minute] += 1;
   }
@@ -1030,14 +1074,20 @@ function getActiveWardTimeline(
 }
 
 function getWardEfficiencyPercent(entries: WardTimelineEntry[], second: number, wardLifetimeSeconds: number) {
-  const { active, completedLifetimes } = buildWardTimelineState(entries, second);
-  const ongoingLifetimes = active.map((entry) => Math.max(0, second - entry.time));
-  const allLifetimes = [...completedLifetimes, ...ongoingLifetimes];
-  if (allLifetimes.length === 0) return null;
-  const efficiency =
-    allLifetimes.reduce((sum, value) => sum + Math.min(value, wardLifetimeSeconds) / wardLifetimeSeconds, 0) /
-    allLifetimes.length;
-  return efficiency * 100;
+  if (!hasReliableWardState(entries)) return null;
+  const { placed, active, completedLifetimes } = buildWardTimelineState(entries, second);
+  if (placed.length === 0) return null;
+
+  const actualLifetimeTotal =
+    completedLifetimes.reduce((sum, value) => sum + Math.min(value, wardLifetimeSeconds), 0) +
+    active.reduce((sum, entry) => sum + Math.min(Math.max(0, second - entry.time), wardLifetimeSeconds), 0);
+  const potentialLifetimeTotal = placed.reduce(
+    (sum, entry) => sum + Math.min(Math.max(0, second - entry.time), wardLifetimeSeconds),
+    0
+  );
+
+  if (potentialLifetimeTotal <= 0) return null;
+  return (actualLifetimeTotal / potentialLifetimeTotal) * 100;
 }
 
 function getItemTimingEvents(player: TimelinePlayer, onlyCoreItems: boolean) {
@@ -1451,9 +1501,12 @@ function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; du
       ...player.sentryLog.map((entry, index) => ({ ...base, ...entry, kind: "sentry" as const, index }))
     ];
   });
+  const hasReliableVisionState = hasReliableWardState(wardEvents);
   const visibleWardEvents = selectedSecond === 0
-    ? wardEvents.filter((entry) => (entry.action ?? "SPAWN").toUpperCase() !== "DESPAWN")
-    : buildWardTimelineState(wardEvents, selectedSecond).active;
+    ? wardEvents.filter((entry) => !isWardRemovalAction(entry.action))
+    : hasReliableVisionState
+      ? buildWardTimelineState(wardEvents, selectedSecond).active
+      : [];
   const activeWards = visibleWardEvents
     .map((entry) => ({
       ...entry,
@@ -1492,23 +1545,33 @@ function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; du
             value={Math.min(selectedSecond, Math.ceil(maxSecond))}
             onChange={(event) => setSelectedSecond(Number(event.target.value))}
           />
-          <p className="muted-inline">At 00:00 the map shows every recorded ward placement. After that, it shows wards that are still active at the selected time whenever despawn data is available.</p>
+          <p className="muted-inline">
+            {hasReliableVisionState
+              ? "At 00:00 the map shows every recorded ward placement. After that, it shows wards that are still active at the selected time whenever despawn data is available."
+              : "This match only has ward placement telemetry. The map can show every recorded placement at 00:00, but active ward state later in the game is not reliable enough to display."}
+          </p>
         </div>
-        <div className="vision-map-board" aria-label="Dota map ward placements">
-          <img className="vision-map-image" src="/api/assets/dota-map" alt="Dota 2 minimap" />
-          <span className="vision-map-label radiant">Radiant</span>
-          <span className="vision-map-label dire">Dire</span>
-          {activeWards.map((ward) => (
-            <span
-              key={`${ward.playerKey}-${ward.kind}-${ward.index}-${ward.time}`}
-              className={`vision-ward ${ward.kind} ${ward.isRadiant ? "radiant" : "dire"}`}
-              style={{ left: `${ward.left}%`, top: `${100 - ward.top}%` }}
-              title={`${ward.heroName}: ${ward.kind} at ${formatDuration(ward.time)}`}
-            >
-              <IconImage src={ward.heroIconUrl} alt={ward.heroName} size="sm" />
-            </span>
-          ))}
-        </div>
+        {selectedSecond > 0 && !hasReliableVisionState ? (
+          <div className="empty-state">
+            <p>Active ward state is not available from the provider for this match.</p>
+          </div>
+        ) : (
+          <div className="vision-map-board" aria-label="Dota map ward placements">
+            <img className="vision-map-image" src="/api/assets/dota-map" alt="Dota 2 minimap" />
+            <span className="vision-map-label radiant">Radiant</span>
+            <span className="vision-map-label dire">Dire</span>
+            {activeWards.map((ward) => (
+              <span
+                key={`${ward.playerKey}-${ward.kind}-${ward.index}-${ward.time}`}
+                className={`vision-ward ${ward.kind} ${ward.isRadiant ? "radiant" : "dire"}`}
+                style={{ left: `${ward.left}%`, top: `${100 - ward.top}%` }}
+                title={`${ward.heroName}: ${ward.kind} at ${formatDuration(ward.time)}`}
+              >
+                <IconImage src={ward.heroIconUrl} alt={ward.heroName} size="sm" />
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   );
@@ -1878,6 +1941,9 @@ export function MatchPage() {
     query.data?.participants.filter((player) => !player.isRadiant).flatMap((player) => player.observerLog) ?? [],
     Math.max(0, timelineMinutes.length - 1)
   );
+  const hasReliableObserverActiveState = hasReliableWardState(
+    query.data?.participants.flatMap((player) => player.observerLog) ?? []
+  );
   const getTeamTimelineValues = (tab: Exclude<TeamTimelineTab, "items">, mode: TimelineMode) => ({
     radiant:
       tab === "gold"
@@ -1889,7 +1955,9 @@ export function MatchPage() {
             : tab === "heroDamage"
               ? (mode === "perMinute" ? perMinuteTimeline(radiantHeroDamageTimeline) : totalTimeline(radiantHeroDamageTimeline))
               : tab === "vision"
-                ? (mode === "perMinute" ? radiantObserverActiveTimeline : radiantObserverPlacementTimeline)
+                ? (mode === "perMinute"
+                    ? (hasReliableObserverActiveState ? radiantObserverActiveTimeline : [])
+                    : radiantObserverPlacementTimeline)
                 : (mode === "perMinute" ? perMinuteTimeline(radiantDamageTakenTimeline) : totalTimeline(radiantDamageTakenTimeline)),
     dire:
       tab === "gold"
@@ -1901,7 +1969,9 @@ export function MatchPage() {
             : tab === "heroDamage"
               ? (mode === "perMinute" ? perMinuteTimeline(direHeroDamageTimeline) : totalTimeline(direHeroDamageTimeline))
               : tab === "vision"
-                ? (mode === "perMinute" ? direObserverActiveTimeline : direObserverPlacementTimeline)
+                ? (mode === "perMinute"
+                    ? (hasReliableObserverActiveState ? direObserverActiveTimeline : [])
+                    : direObserverPlacementTimeline)
                 : (mode === "perMinute" ? perMinuteTimeline(direDamageTakenTimeline) : totalTimeline(direDamageTakenTimeline))
   });
   const selectTeamTimeline = (tab: OverlayTimelineTab, mode: TimelineMode) => {
@@ -2258,7 +2328,9 @@ export function MatchPage() {
                   title={
                     teamTimelineTab === "vision"
                       ? teamTimelineMode === "perMinute"
-                        ? "Active observer wards"
+                        ? hasReliableObserverActiveState
+                          ? "Active observer wards"
+                          : "Active observer wards unavailable"
                         : "Cumulative observer wards placed"
                       : undefined
                   }

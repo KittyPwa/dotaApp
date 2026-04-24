@@ -398,6 +398,17 @@ export const leagueOverviewSchema = z.object({
   lastMatchTime: z.number().nullable(),
   uniquePlayers: z.number(),
   uniqueHeroes: z.number(),
+  teams: z.array(
+    z.object({
+      teamId: z.number(),
+      name: z.string(),
+      tag: z.string().nullable(),
+      games: z.number(),
+      wins: z.number(),
+      losses: z.number(),
+      winrate: z.number()
+    })
+  ).default([]),
   topHeroes: z.array(
     z.object({
       heroId: z.number(),
@@ -466,6 +477,66 @@ export const leagueOverviewSchema = z.object({
     ).default([]),
     matches: z.array(heroMatchSummarySchema)
   });
+
+export const teamOverviewSchema = z.object({
+  leagueId: z.number(),
+  leagueName: z.string(),
+  teamId: z.number(),
+  name: z.string(),
+  tag: z.string().nullable(),
+  games: z.number(),
+  wins: z.number(),
+  losses: z.number(),
+  winrate: z.number(),
+  firstMatchTime: z.number().nullable(),
+  lastMatchTime: z.number().nullable(),
+  uniquePlayers: z.number(),
+  uniqueHeroes: z.number(),
+  topHeroes: z.array(
+    z.object({
+      heroId: z.number(),
+      heroName: z.string(),
+      heroIconUrl: z.string().nullable(),
+      games: z.number(),
+      wins: z.number(),
+      losses: z.number(),
+      winrate: z.number()
+    })
+  ),
+  players: z.array(
+    z.object({
+      playerId: z.number().nullable(),
+      personaname: z.string().nullable(),
+      avatar: z.string().nullable(),
+      games: z.number(),
+      wins: z.number(),
+      losses: z.number(),
+      winrate: z.number(),
+      uniqueHeroes: z.number(),
+      comparisonStats: z.array(
+        z.object({
+          key: z.string(),
+          label: z.string(),
+          value: z.number(),
+          higherIsBetter: z.boolean()
+        })
+      )
+    })
+  ),
+  matches: z.array(
+    z.object({
+      matchId: z.number(),
+      startTime: z.number().nullable(),
+      durationSeconds: z.number().nullable(),
+      teamWin: z.boolean().nullable(),
+      opponentName: z.string().nullable(),
+      teamScore: z.number().nullable(),
+      opponentScore: z.number().nullable(),
+      patch: z.string().nullable(),
+      parsedData: matchParsedDataSchema
+    })
+  )
+});
 
 export const leagueSyncResponseSchema = z.object({
   leagueId: z.number(),
@@ -621,6 +692,7 @@ export const settingsSchema = z.object({
   recentPatchCount: z.number().int().min(0).default(2),
   autoRefreshPlayerIds: z.array(z.number().int().positive()).default([]),
   colorblindMode: z.boolean().default(false),
+  darkMode: z.boolean().default(false),
   stratzPerSecondCap: z.number().int().min(1).max(1000).default(20),
   stratzPerMinuteCap: z.number().int().min(1).max(10000).default(250),
   stratzPerHourCap: z.number().int().min(1).max(100000).default(2000),
@@ -636,6 +708,7 @@ export type HeroStat = z.infer<typeof heroStatSchema>;
 export type HeroOverview = z.infer<typeof heroOverviewSchema>;
 export type LeagueSummary = z.infer<typeof leagueSummarySchema>;
 export type LeagueOverview = z.infer<typeof leagueOverviewSchema>;
+export type TeamOverview = z.infer<typeof teamOverviewSchema>;
 export type LeagueSyncResponse = z.infer<typeof leagueSyncResponseSchema>;
 export type DashboardResponse = z.infer<typeof dashboardSchema>;
 export type CommunityGraph = z.infer<typeof communityGraphSchema>;

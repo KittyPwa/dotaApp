@@ -129,6 +129,21 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/leagues/:leagueId/teams/:teamId", async (request, reply) => {
+    const params = z
+      .object({
+        leagueId: z.coerce.number().int().positive(),
+        teamId: z.coerce.number().int().positive()
+      })
+      .parse(request.params);
+    try {
+      return await service.getLeagueTeamOverview(params.leagueId, params.teamId);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to load team." };
+    }
+  });
+
   app.post("/api/leagues/:leagueId/sync", async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);

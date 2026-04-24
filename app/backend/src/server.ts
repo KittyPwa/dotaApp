@@ -49,7 +49,7 @@ if (config.nodeEnv === "production") {
 runMigrations();
 
 const address = await app.listen({
-  host: "127.0.0.1",
+  host: config.backendHost,
   port: config.backendPort
 });
 
