@@ -40,8 +40,12 @@ if (config.nodeEnv === "production") {
   await app.get("/dashboard", serveFrontend);
   await app.get("/settings", serveFrontend);
   await app.get("/compare", serveFrontend);
+  await app.get("/drafts", serveFrontend);
   await app.get("/heroes", serveFrontend);
   await app.get("/heroes/:heroId", serveFrontend);
+  await app.get("/leagues", serveFrontend);
+  await app.get("/leagues/:leagueId", serveFrontend);
+  await app.get("/leagues/:leagueId/teams/:teamId", serveFrontend);
   await app.get("/players/:playerId", serveFrontend);
   await app.get("/matches/:matchId", serveFrontend);
 

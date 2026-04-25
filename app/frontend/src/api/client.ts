@@ -9,6 +9,7 @@ const SESSION_PATCH_COUNT_KEY = "dota-session-patch-count";
 const LOCAL_PRIMARY_PLAYER_ID_KEY = "dota-local-primary-player-id";
 const LOCAL_FAVORITE_PLAYER_IDS_KEY = "dota-local-favorite-player-ids";
 const LOCAL_AUTO_REFRESH_PLAYER_IDS_KEY = "dota-local-auto-refresh-player-ids";
+const LOCAL_DRAFT_OWNER_KEY = "dota-local-draft-owner-key";
 export const SESSION_PREFERENCES_EVENT = "dota-session-preferences-changed";
 export const LOCAL_PLAYER_PREFERENCES_EVENT = "dota-local-player-preferences-changed";
 
@@ -43,6 +44,22 @@ function parseStoredPlayerIds(value: string | null) {
     .split(",")
     .map((entry) => Number(entry.trim()))
     .filter((entry, index, list) => Number.isInteger(entry) && entry > 0 && list.indexOf(entry) === index);
+}
+
+function createBrowserKey() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
+}
+
+export function getLocalDraftOwnerKey() {
+  if (typeof window === "undefined") return null;
+  const existing = window.localStorage.getItem(LOCAL_DRAFT_OWNER_KEY);
+  if (existing) return existing;
+  const next = createBrowserKey();
+  window.localStorage.setItem(LOCAL_DRAFT_OWNER_KEY, next);
+  return next;
 }
 
 export function getLocalPrimaryPlayerIdOverride() {
@@ -171,6 +188,10 @@ function buildHeaders(headers?: HeadersInit) {
   if (autoRefreshPlayerIds.length > 0) {
     built.set("x-user-auto-refresh-player-ids", autoRefreshPlayerIds.join(","));
   }
+  const draftOwnerKey = getLocalDraftOwnerKey();
+  if (draftOwnerKey) {
+    built.set("x-draft-owner-key", draftOwnerKey);
+  }
   const colorblindOverride = getSessionColorblindModeOverride();
   if (colorblindOverride !== null) {
     built.set("x-session-colorblind-mode", colorblindOverride ? "true" : "false");
@@ -201,6 +222,18 @@ export async function apiPost<T>(path: string, body: unknown, init?: { headers?:
     method: "POST",
     headers: buildHeaders({ "Content-Type": "application/json", ...(init?.headers ?? {}) }),
     body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(payload?.message ?? `Request failed with ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function apiDelete<T>(path: string, init?: { headers?: HeadersInit }): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: "DELETE",
+    headers: buildHeaders(init?.headers)
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { message?: string } | null;

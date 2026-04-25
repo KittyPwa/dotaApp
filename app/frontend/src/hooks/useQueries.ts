@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CommunityGraph,
+  DraftContextResponse,
   DashboardResponse,
+  DraftPlanPayload,
   HeroOverview,
   HeroStat,
   LeagueOverview,
@@ -13,7 +15,7 @@ import type {
   SettingsPayload,
   TeamOverview
 } from "@dota/shared";
-import { apiGet, apiPost } from "../api/client";
+import { apiDelete, apiGet, apiPost } from "../api/client";
 
 export function useDashboard() {
   return useQuery({
@@ -70,6 +72,56 @@ export function useLeagueTeam(leagueId: number | null, teamId: number | null) {
     queryKey: ["league-team", leagueId, teamId],
     queryFn: () => apiGet<TeamOverview>(`/api/leagues/${leagueId}/teams/${teamId}`),
     enabled: leagueId !== null && teamId !== null
+  });
+}
+
+export function useDraftPlans(leagueId: number | null) {
+  const query = new URLSearchParams();
+  if (leagueId) query.set("leagueId", String(leagueId));
+  const suffix = query.toString();
+
+  return useQuery({
+    queryKey: ["draft-plans", leagueId],
+    queryFn: () => apiGet<DraftPlanPayload[]>(`/api/draft-plans${suffix ? `?${suffix}` : ""}`),
+    enabled: leagueId !== null
+  });
+}
+
+export function useDraftContext(firstPlayerIds: number[], secondPlayerIds: number[]) {
+  const firstIds = [...new Set(firstPlayerIds.filter((id) => Number.isInteger(id) && id > 0))].slice(0, 5);
+  const secondIds = [...new Set(secondPlayerIds.filter((id) => Number.isInteger(id) && id > 0))].slice(0, 5);
+  const query = new URLSearchParams();
+  if (firstIds.length) query.set("firstPlayerIds", firstIds.join(","));
+  if (secondIds.length) query.set("secondPlayerIds", secondIds.join(","));
+  const suffix = query.toString();
+
+  return useQuery({
+    queryKey: ["draft-context", firstIds.join(","), secondIds.join(",")],
+    queryFn: () => apiGet<DraftContextResponse>(`/api/draft-context${suffix ? `?${suffix}` : ""}`),
+    enabled: firstIds.length > 0 || secondIds.length > 0
+  });
+}
+
+export function useSaveDraftPlan() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (draft: DraftPlanPayload) => apiPost<DraftPlanPayload>("/api/draft-plans", draft),
+    onSuccess: async (draft) => {
+      await queryClient.invalidateQueries({ queryKey: ["draft-plans", draft.leagueId] });
+    }
+  });
+}
+
+export function useDeleteDraftPlan() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ draftId, leagueId }: { draftId: string; leagueId: number }) =>
+      apiDelete<{ ok: boolean }>(`/api/draft-plans/${encodeURIComponent(draftId)}`).then((result) => ({ ...result, leagueId })),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["draft-plans", result.leagueId] });
+    }
   });
 }
 

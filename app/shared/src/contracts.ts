@@ -253,6 +253,7 @@ export const heroStatSchema = z.object({
   heroId: z.number(),
   heroName: z.string(),
   heroIconUrl: z.string().nullable(),
+  primaryAttr: z.string().nullable().optional(),
   games: z.number(),
   wins: z.number(),
   winrate: z.number(),
@@ -674,6 +675,63 @@ export const playerCompareSchema = z.object({
   )
 });
 
+export const draftSideSchema = z.enum(["first", "second"]);
+export const draftSlotKindSchema = z.enum(["ban", "pick"]);
+
+export const draftSlotSchema = z.object({
+  id: z.string().min(1),
+  side: draftSideSchema,
+  kind: draftSlotKindSchema,
+  label: z.string().min(1),
+  heroIds: z.array(z.number().int().positive())
+});
+
+export const draftPlanSchema = z.object({
+  id: z.string().min(1),
+  leagueId: z.number().int().positive(),
+  name: z.string().min(1).max(120),
+  firstTeamId: z.number().int().positive().nullable(),
+  secondTeamId: z.number().int().positive().nullable(),
+  updatedAt: z.number(),
+  slots: z.array(draftSlotSchema)
+});
+
+export const draftContextHeroSchema = z.object({
+  heroId: z.number(),
+  heroName: z.string(),
+  heroIconUrl: z.string().nullable(),
+  games: z.number(),
+  wins: z.number(),
+  winrate: z.number()
+});
+
+export const draftContextPlayerSchema = z.object({
+  playerId: z.number(),
+  personaname: z.string().nullable(),
+  totalGames: z.number(),
+  heroes: z.array(draftContextHeroSchema)
+});
+
+export const draftContextComboSchema = z.object({
+  side: draftSideSchema,
+  comboKey: z.string(),
+  games: z.number(),
+  wins: z.number(),
+  winrate: z.number(),
+  heroes: z.array(
+    z.object({
+      heroId: z.number(),
+      heroName: z.string(),
+      heroIconUrl: z.string().nullable()
+    })
+  )
+});
+
+export const draftContextSchema = z.object({
+  players: z.array(draftContextPlayerSchema),
+  combos: z.array(draftContextComboSchema)
+});
+
 export const settingsSchema = z.object({
   openDotaApiKey: z.string().nullable(),
   stratzApiKey: z.string().nullable(),
@@ -714,3 +772,5 @@ export type DashboardResponse = z.infer<typeof dashboardSchema>;
 export type CommunityGraph = z.infer<typeof communityGraphSchema>;
 export type SettingsPayload = z.infer<typeof settingsSchema>;
 export type PlayerCompareResponse = z.infer<typeof playerCompareSchema>;
+export type DraftPlanPayload = z.infer<typeof draftPlanSchema>;
+export type DraftContextResponse = z.infer<typeof draftContextSchema>;

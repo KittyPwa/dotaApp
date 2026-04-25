@@ -53,6 +53,19 @@ export function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS provider_request_events_provider_requested_at_idx
       ON provider_request_events(provider, requested_at);
+    CREATE TABLE IF NOT EXISTS draft_plans (
+      id text primary key,
+      owner_key text not null,
+      league_id integer not null,
+      name text not null,
+      first_team_id integer,
+      second_team_id integer,
+      slots_json text not null,
+      created_at integer not null default (unixepoch() * 1000),
+      updated_at integer not null default (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS draft_plans_owner_league_idx
+      ON draft_plans(owner_key, league_id);
   `);
   ensureColumn("players", "rank_tier", "integer");
   ensureColumn("players", "leaderboard_rank", "integer");

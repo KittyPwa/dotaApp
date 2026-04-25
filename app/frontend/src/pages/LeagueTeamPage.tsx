@@ -9,10 +9,10 @@ import { StatsRadarChart } from "../components/StatsRadarChart";
 import { EmptyState, ErrorState, LoadingState } from "../components/State";
 import { TableCard } from "../components/TableCard";
 import { usePagination } from "../hooks/usePagination";
-import { useLeagueTeam } from "../hooks/useQueries";
+import { useDraftPlans, useHeroStats, useLeagueTeam } from "../hooks/useQueries";
 import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
-type TeamTab = "players" | "heroes" | "matches";
+type TeamTab = "players" | "heroes" | "matches" | "drafts";
 type PlayerSortKey = "player" | "games" | "wins" | "losses" | "winrate" | "heroes";
 type HeroSortKey = "hero" | "games" | "wins" | "losses" | "winrate";
 type MatchSortKey = "match" | "date" | "duration" | "result" | "opponent" | "patch" | "parsedData";
@@ -22,6 +22,8 @@ export function LeagueTeamPage() {
   const leagueId = params.leagueId ? Number(params.leagueId) : null;
   const teamId = params.teamId ? Number(params.teamId) : null;
   const query = useLeagueTeam(Number.isFinite(leagueId) ? leagueId : null, Number.isFinite(teamId) ? teamId : null);
+  const draftPlans = useDraftPlans(Number.isFinite(leagueId) ? leagueId : null);
+  const heroStats = useHeroStats({ leagueId: Number.isFinite(leagueId) ? leagueId : null });
   const [activeTab, setActiveTab] = useState<TeamTab>("players");
   const [hiddenRadarPlayerIds, setHiddenRadarPlayerIds] = useState<number[]>([]);
   const [playerSearch, setPlayerSearch] = useState("");
@@ -163,6 +165,17 @@ export function LeagueTeamPage() {
   const pagedPlayers = playerPagination.paged(sortedPlayers);
   const pagedHeroes = heroPagination.paged(sortedHeroes);
   const pagedMatches = matchPagination.paged(sortedMatches);
+  const heroesById = useMemo(
+    () => new Map((heroStats.data ?? []).map((hero) => [hero.heroId, hero])),
+    [heroStats.data]
+  );
+  const teamDrafts = useMemo(
+    () =>
+      (draftPlans.data ?? [])
+        .filter((draft) => draft.firstTeamId === teamId || draft.secondTeamId === teamId)
+        .sort((left, right) => right.updatedAt - left.updatedAt),
+    [draftPlans.data, teamId]
+  );
 
   return (
     <Page
@@ -172,6 +185,13 @@ export function LeagueTeamPage() {
           <span>
             League scope: <Link to={`/leagues/${query.data.leagueId}`}>{query.data.leagueName}</Link>
           </span>
+        ) : undefined
+      }
+      aside={
+        query.data ? (
+          <Link className="button-link" to={`/drafts?leagueId=${query.data.leagueId}&firstTeamId=${query.data.teamId}`}>
+            Draft for this team
+          </Link>
         ) : undefined
       }
     >
@@ -232,7 +252,8 @@ export function LeagueTeamPage() {
             {[
               ["players", "Players"],
               ["heroes", "Heroes"],
-              ["matches", "Matches"]
+              ["matches", "Matches"],
+              ["drafts", `Drafts (${teamDrafts.length})`]
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -440,6 +461,45 @@ export function LeagueTeamPage() {
                 ]}
               />
             </TableCard>
+          ) : null}
+
+          {activeTab === "drafts" ? (
+            <Card title="Team drafts">
+              {teamDrafts.length > 0 ? (
+                <div className="team-draft-grid">
+                  {teamDrafts.map((draft) => (
+                    <Link
+                      key={draft.id}
+                      className="team-draft-card"
+                      to={`/drafts?leagueId=${draft.leagueId}&draftId=${encodeURIComponent(draft.id)}`}
+                    >
+                      <div className="team-draft-card-header">
+                        <strong>{draft.name}</strong>
+                        <span>{draft.firstTeamId === teamId ? "First pick side" : "Second pick side"}</span>
+                      </div>
+                      <div className="team-draft-mini-board">
+                        {draft.slots
+                          .filter((slot) => (draft.firstTeamId === teamId ? slot.side === "first" : slot.side === "second"))
+                          .slice(0, 12)
+                          .map((slot) => (
+                            <div key={slot.id} className={`team-draft-mini-slot ${slot.kind}`}>
+                              <span>{slot.label}</span>
+                              <div>
+                                {slot.heroIds.slice(0, 4).map((heroId) => {
+                                  const hero = heroesById.get(heroId);
+                                  return <IconImage key={heroId} src={hero?.heroIconUrl} alt={hero?.heroName ?? "Hero"} size="sm" />;
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState label="No draft plans are saved for this team in this browser profile yet." />
+              )}
+            </Card>
           ) : null}
         </>
       ) : null}

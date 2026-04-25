@@ -2,6 +2,7 @@ import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type {
   CommunityGraph,
+  DraftContextResponse,
   HeroOverview,
   LeagueOverview,
   LeagueSummary,
@@ -50,6 +51,8 @@ type BrowserPreferencesOverrides = {
   autoRefreshPlayerIds?: number[] | null;
 };
 
+type DraftContextSide = "first" | "second";
+
 type AbilityMetadata = {
   abilityName: string;
   imageUrl: string | null;
@@ -82,6 +85,149 @@ export class DotaDataService {
   private readonly rawPayloads = new RawPayloadService();
   private readonly settingsService = new SettingsService();
   private readonly analyticsService = new AnalyticsService();
+
+  private uniquePositiveIds(ids: number[]) {
+    return ids.filter((id, index, list) => Number.isInteger(id) && id > 0 && list.indexOf(id) === index);
+  }
+
+  async getDraftContext(input: { firstPlayerIds: number[]; secondPlayerIds: number[] }): Promise<DraftContextResponse> {
+    const firstPlayerIds = this.uniquePositiveIds(input.firstPlayerIds).slice(0, 5);
+    const secondPlayerIds = this.uniquePositiveIds(input.secondPlayerIds).slice(0, 5);
+    const allPlayerIds = this.uniquePositiveIds([...firstPlayerIds, ...secondPlayerIds]);
+
+    if (allPlayerIds.length === 0) {
+      return { players: [], combos: [] };
+    }
+
+    const rows = await db
+      .select({
+        matchId: matchPlayers.matchId,
+        playerId: matchPlayers.playerId,
+        personaname: players.personaname,
+        heroId: matchPlayers.heroId,
+        heroName: heroes.localizedName,
+        heroIconPath: heroes.iconPath,
+        win: matchPlayers.win
+      })
+      .from(matchPlayers)
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
+      .where(and(inArray(matchPlayers.playerId, allPlayerIds), sql`${matchPlayers.heroId} is not null`));
+
+    const playerMap = new Map<
+      number,
+      {
+        playerId: number;
+        personaname: string | null;
+        totalGames: number;
+        heroes: Map<number, { heroId: number; heroName: string; heroIconUrl: string | null; games: number; wins: number }>;
+      }
+    >();
+
+    for (const row of rows) {
+      if (!row.playerId || !row.heroId) continue;
+      const player =
+        playerMap.get(row.playerId) ??
+        {
+          playerId: row.playerId,
+          personaname: row.personaname,
+          totalGames: 0,
+          heroes: new Map()
+        };
+      player.totalGames += 1;
+      const hero =
+        player.heroes.get(row.heroId) ??
+        {
+          heroId: row.heroId,
+          heroName: row.heroName ?? `Hero ${row.heroId}`,
+          heroIconUrl: buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroName ?? "")),
+          games: 0,
+          wins: 0
+        };
+      hero.games += 1;
+      if (row.win === true) hero.wins += 1;
+      player.heroes.set(row.heroId, hero);
+      playerMap.set(row.playerId, player);
+    }
+
+    const makeCombos = (sidePlayerIds: number[], side: DraftContextSide) => {
+      const scopedPlayerIds = new Set(sidePlayerIds);
+      const byMatch = new Map<number, typeof rows>();
+      for (const row of rows) {
+        if (!row.playerId || !row.heroId || !scopedPlayerIds.has(row.playerId)) continue;
+        const matchRows = byMatch.get(row.matchId) ?? [];
+        matchRows.push(row);
+        byMatch.set(row.matchId, matchRows);
+      }
+
+      const comboMap = new Map<
+        string,
+        {
+          side: DraftContextSide;
+          comboKey: string;
+          games: number;
+          wins: number;
+          heroes: Array<{ heroId: number; heroName: string; heroIconUrl: string | null }>;
+        }
+      >();
+
+      for (const matchRows of byMatch.values()) {
+        const uniqueHeroes = [...new Map(matchRows.map((row) => [row.heroId, row])).values()].filter(
+          (row) => typeof row.heroId === "number"
+        );
+        for (let i = 0; i < uniqueHeroes.length; i += 1) {
+          for (let j = i + 1; j < uniqueHeroes.length; j += 1) {
+            const pair = [uniqueHeroes[i], uniqueHeroes[j]].sort((left, right) => (left.heroId ?? 0) - (right.heroId ?? 0));
+            const comboKey = pair.map((hero) => hero.heroId).join("-");
+            const combo =
+              comboMap.get(comboKey) ??
+              {
+                side,
+                comboKey,
+                games: 0,
+                wins: 0,
+                heroes: pair.map((hero) => ({
+                  heroId: hero.heroId ?? 0,
+                  heroName: hero.heroName ?? `Hero ${hero.heroId}`,
+                  heroIconUrl: buildAssetProxyUrl(hero.heroIconPath ?? defaultHeroIconPath(hero.heroName ?? ""))
+                }))
+              };
+            combo.games += 1;
+            if (pair.some((hero) => hero.win === true)) combo.wins += 1;
+            comboMap.set(comboKey, combo);
+          }
+        }
+      }
+
+      return [...comboMap.values()]
+        .map((combo) => ({
+          ...combo,
+          winrate: combo.games ? Number(((combo.wins / combo.games) * 100).toFixed(1)) : 0
+        }))
+        .sort((left, right) => right.games - left.games || right.winrate - left.winrate)
+        .slice(0, 80);
+    };
+
+    return {
+      players: allPlayerIds.map((playerId) => {
+        const player = playerMap.get(playerId);
+        const heroRows = player ? [...player.heroes.values()] : [];
+        return {
+          playerId,
+          personaname: player?.personaname ?? null,
+          totalGames: player?.totalGames ?? 0,
+          heroes: heroRows
+            .map((hero) => ({
+              ...hero,
+              winrate: hero.games ? Number(((hero.wins / hero.games) * 100).toFixed(1)) : 0
+            }))
+            .sort((left, right) => right.games - left.games || right.winrate - left.winrate)
+            .slice(0, 20)
+        };
+      }),
+      combos: [...makeCombos(firstPlayerIds, "first"), ...makeCombos(secondPlayerIds, "second")]
+    };
+  }
 
   private async createOpenDotaAdapter() {
     const settings = await this.settingsService.getSettings({ includeProtected: true });
@@ -1041,10 +1187,10 @@ export class DotaDataService {
       heroId?: number | null;
       sessionSettings?: SessionSettingsOverrides;
       browserPreferences?: BrowserPreferencesOverrides;
+      cacheOnly?: boolean;
     }
   ): Promise<PlayerOverview> {
     await this.ensureReferenceData();
-    const adapter = await this.createOpenDotaAdapter();
     const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
     const matchScopeLabel = await this.getMatchScopeLabel(matchScope, options?.sessionSettings);
     const matchScopeCondition = this.buildMatchScopeCondition(matches, matchScope);
@@ -1086,8 +1232,9 @@ export class DotaDataService {
 
     let source: "cache" | "fresh" = "cache";
 
-    if (shouldRefresh || shouldRefreshHistory) {
+    if (!options?.cacheOnly && (shouldRefresh || shouldRefreshHistory)) {
       logger.info("Refreshing player data", { playerId });
+      const adapter = await this.createOpenDotaAdapter();
       const requests = [
         adapter.getPlayerProfile(playerId),
         adapter.getPlayerRecentMatches(playerId),
@@ -3527,7 +3674,8 @@ export class DotaDataService {
     for (const playerId of focusedPlayerIds) {
       const overview = await this.getPlayerOverview(playerId, {
         sessionSettings: options?.sessionSettings,
-        browserPreferences: options?.browserPreferences
+        browserPreferences: options?.browserPreferences,
+        cacheOnly: true
       });
       focusedPlayers.push({
         playerId: overview.playerId,

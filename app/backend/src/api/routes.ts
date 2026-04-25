@@ -1,8 +1,10 @@
 import { z } from "zod";
-import { settingsSchema } from "@dota/shared";
+import { draftPlanSchema, settingsSchema } from "@dota/shared";
 import type { FastifyInstance } from "fastify";
+import { and, eq } from "drizzle-orm";
 import { DotaDataService } from "../services/dotaDataService.js";
-import { checkDbHealth } from "../db/client.js";
+import { checkDbHealth, db } from "../db/client.js";
+import { draftPlans } from "../db/schema.js";
 import { getCachedAssetBuffer, getCachedCurrentDotaMapBuffer, getMimeType } from "../utils/assets.js";
 import { config } from "../utils/config.js";
 
@@ -57,6 +59,23 @@ export async function registerRoutes(app: FastifyInstance) {
         typeof autoRefreshPlayersValue === "string" ? parsePlayerList(autoRefreshPlayersValue) : undefined
     };
   };
+  const getDraftOwnerKey = (request: { headers: Record<string, unknown> }) => {
+    const rawHeader = request.headers["x-draft-owner-key"];
+    const value = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+    if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{16,128}$/.test(value)) {
+      throw new Error("Missing draft owner key.");
+    }
+    return value;
+  };
+  const mapDraftPlanRow = (row: typeof draftPlans.$inferSelect) => ({
+    id: row.id,
+    leagueId: row.leagueId,
+    name: row.name,
+    firstTeamId: row.firstTeamId,
+    secondTeamId: row.secondTeamId,
+    updatedAt: row.updatedAt?.getTime?.() ?? Date.now(),
+    slots: JSON.parse(row.slotsJson) as unknown
+  });
 
   app.get("/api/health", async () => {
     const databaseOk = checkDbHealth();
@@ -145,6 +164,104 @@ export async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to load team." };
+    }
+  });
+
+  app.get("/api/draft-plans", async (request, reply) => {
+    const query = z
+      .object({
+        leagueId: z.coerce.number().int().positive().optional()
+      })
+      .parse(request.query);
+    try {
+      const ownerKey = getDraftOwnerKey(request);
+      const rows = await db
+        .select()
+        .from(draftPlans)
+        .where(
+          query.leagueId
+            ? and(eq(draftPlans.ownerKey, ownerKey), eq(draftPlans.leagueId, query.leagueId))
+            : eq(draftPlans.ownerKey, ownerKey)
+        );
+      return rows
+        .map((row) => draftPlanSchema.parse(mapDraftPlanRow(row)))
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to load draft plans." };
+    }
+  });
+
+  app.get("/api/draft-context", async (request, reply) => {
+    const query = z
+      .object({
+        firstPlayerIds: z.string().optional(),
+        secondPlayerIds: z.string().optional()
+      })
+      .parse(request.query);
+    const parseIds = (value: string | undefined) =>
+      (value ?? "")
+        .split(",")
+        .map((entry) => Number(entry.trim()))
+        .filter((entry, index, list) => Number.isInteger(entry) && entry > 0 && list.indexOf(entry) === index)
+        .slice(0, 5);
+
+    try {
+      return await service.getDraftContext({
+        firstPlayerIds: parseIds(query.firstPlayerIds),
+        secondPlayerIds: parseIds(query.secondPlayerIds)
+      });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to load draft context." };
+    }
+  });
+
+  app.post("/api/draft-plans", async (request, reply) => {
+    try {
+      const ownerKey = getDraftOwnerKey(request);
+      const body = draftPlanSchema.parse(request.body);
+      const now = Date.now();
+      await db
+        .insert(draftPlans)
+        .values({
+          id: body.id,
+          ownerKey,
+          leagueId: body.leagueId,
+          name: body.name,
+          firstTeamId: body.firstTeamId,
+          secondTeamId: body.secondTeamId,
+          slotsJson: JSON.stringify(body.slots),
+          updatedAt: new Date(now)
+        })
+        .onConflictDoUpdate({
+          target: draftPlans.id,
+          set: {
+            leagueId: body.leagueId,
+            name: body.name,
+            firstTeamId: body.firstTeamId,
+            secondTeamId: body.secondTeamId,
+            slotsJson: JSON.stringify(body.slots),
+            updatedAt: new Date(now)
+          },
+          where: eq(draftPlans.ownerKey, ownerKey)
+        });
+      return { ...body, updatedAt: now };
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to save draft plan." };
+    }
+  });
+
+  app.delete("/api/draft-plans/:draftId", async (request, reply) => {
+    const params = z.object({ draftId: z.string().min(1) }).parse(request.params);
+    try {
+      const ownerKey = getDraftOwnerKey(request);
+      await db.delete(draftPlans).where(and(eq(draftPlans.id, params.draftId), eq(draftPlans.ownerKey, ownerKey)));
+      return { ok: true };
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to delete draft plan." };
     }
   });
 

@@ -167,6 +167,28 @@ export const drafts = sqliteTable("drafts", {
     .default(sql`(unixepoch() * 1000)`)
 });
 
+export const draftPlans = sqliteTable(
+  "draft_plans",
+  {
+    id: text("id").primaryKey(),
+    ownerKey: text("owner_key").notNull(),
+    leagueId: integer("league_id").notNull(),
+    name: text("name").notNull(),
+    firstTeamId: integer("first_team_id"),
+    secondTeamId: integer("second_team_id"),
+    slotsJson: text("slots_json").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`)
+  },
+  (table) => ({
+    ownerLeagueIdx: index("draft_plans_owner_league_idx").on(table.ownerKey, table.leagueId)
+  })
+);
+
 export const rawApiPayloads = sqliteTable(
   "raw_api_payloads",
   {
@@ -216,6 +238,7 @@ export const schema = {
   patches,
   leagues,
   drafts,
+  draftPlans,
   rawApiPayloads,
   settings,
   providerRequestEvents

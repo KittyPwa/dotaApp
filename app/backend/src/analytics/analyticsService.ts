@@ -17,6 +17,7 @@ export class AnalyticsService {
         heroInternalName: heroes.name,
         heroName: heroes.localizedName,
         heroIconPath: heroes.iconPath,
+        primaryAttr: heroes.primaryAttr,
         games: count(matchPlayers.id),
         wins: sql<number>`sum(case when ${matchPlayers.win} = 1 then 1 else 0 end)`,
         uniquePlayers: sql<number>`count(distinct ${matchPlayers.playerId})`,
@@ -34,7 +35,7 @@ export class AnalyticsService {
       .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
       .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere, leagueWhere))
-      .groupBy(matchPlayers.heroId, heroes.name, heroes.localizedName, heroes.iconPath)
+      .groupBy(matchPlayers.heroId, heroes.name, heroes.localizedName, heroes.iconPath, heroes.primaryAttr)
       .orderBy(desc(count(matchPlayers.id)));
 
     const itemRows = await db
@@ -73,6 +74,7 @@ export class AnalyticsService {
       heroId: row.heroId ?? 0,
       heroName: row.heroName ?? `Hero ${row.heroId}`,
       heroIconUrl: buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroInternalName)),
+      primaryAttr: row.primaryAttr ?? null,
       games: row.games,
       wins: row.wins ?? 0,
       winrate: row.games ? Number((((row.wins ?? 0) / row.games) * 100).toFixed(1)) : 0,

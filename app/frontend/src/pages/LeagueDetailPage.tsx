@@ -17,7 +17,7 @@ type HeroSortKey = "hero" | "games" | "wins" | "losses" | "winrate" | "players";
 type PlayerSortKey = "player" | "games" | "wins" | "losses" | "winrate" | "heroes";
 type ItemSortKey = "item" | "games" | "wins" | "losses" | "winrate";
 type TeamSortKey = "team" | "games" | "wins" | "losses" | "winrate";
-type LeagueTab = "heroes" | "players" | "teams" | "items" | "matches";
+type LeagueTab = "heroes" | "players" | "teams" | "items" | "matches" | "drafts";
 
 function ParsedDataPill({ label }: { label: string }) {
   return <span className={`parsed-data-pill ${label === "Full" ? "rich" : "basic"}`}>{label}</span>;
@@ -380,7 +380,8 @@ export function LeagueDetailPage() {
               ["heroes", "Heroes"],
               ["players", "Players"],
               ...(query.data.teams.length > 0 ? ([["teams", "Teams"]] as Array<[string, string]>) : []),
-              ["items", "Items"]
+              ["items", "Items"],
+              ["drafts", "Drafts"]
             ].map(([key, label]) => (
                 <button
                   key={key}
@@ -392,6 +393,22 @@ export function LeagueDetailPage() {
               </button>
             ))}
           </div>
+
+          {activeTab === "drafts" ? (
+            <Card title="Draft workspace">
+              <div className="league-draft-card">
+                <div>
+                  <strong>{query.data.name}</strong>
+                  <p className="muted-text">
+                    Build pick and ban variants for this league with the local hero and team context already selected.
+                  </p>
+                </div>
+                <Link className="button-link" to={`/drafts?leagueId=${leagueId}`}>
+                  Open draft planner
+                </Link>
+              </div>
+            </Card>
+          ) : null}
 
           {activeTab === "heroes" || activeTab === "players" ? (
           <div className="two-column">

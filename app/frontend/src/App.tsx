@@ -6,6 +6,7 @@ import {
   SESSION_PREFERENCES_EVENT
 } from "./api/client";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DraftsPage } from "./pages/DraftsPage";
 import { HeroDetailPage } from "./pages/HeroDetailPage";
 import { HeroStatsPage } from "./pages/HeroStatsPage";
 import { LeagueDetailPage } from "./pages/LeagueDetailPage";
@@ -58,6 +59,7 @@ export function App() {
           <NavLink to="/">Dashboard</NavLink>
           <NavLink to="/home">Lookup</NavLink>
           <NavLink to="/compare">Compare</NavLink>
+          <NavLink to="/drafts">Drafts</NavLink>
           <NavLink to="/heroes">Heroes</NavLink>
           <NavLink to="/leagues">Leagues</NavLink>
           {settings.data?.savedLeagues.map((league) => (
@@ -73,6 +75,7 @@ export function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/drafts" element={<DraftsPage />} />
           <Route path="/heroes" element={<HeroStatsPage />} />
           <Route path="/heroes/:heroId" element={<HeroDetailPage />} />
           <Route path="/leagues" element={<LeaguesPage />} />

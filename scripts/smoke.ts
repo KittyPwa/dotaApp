@@ -1,11 +1,15 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 const port = process.env.SMOKE_PORT ?? "3345";
 const baseUrl = `http://127.0.0.1:${port}`;
+const smokeDatabasePath = resolve(process.cwd(), "app/backend/.data", `smoke-${Date.now()}.sqlite`);
+mkdirSync(dirname(smokeDatabasePath), { recursive: true });
 
-async function getJson(path: string) {
-  const response = await fetch(`${baseUrl}${path}`);
+async function getJson(path: string, headers?: Record<string, string>) {
+  const response = await fetch(`${baseUrl}${path}`, { headers });
   const text = await response.text();
   let body: unknown = null;
   try {
@@ -21,6 +25,33 @@ async function getJson(path: string) {
   return body;
 }
 
+async function postJson(path: string, body: unknown, headers?: Record<string, string>) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(headers ?? {}) },
+    body: JSON.stringify(body)
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(`${path} failed (${response.status}): ${JSON.stringify(payload)}`);
+  }
+  return payload;
+}
+
+async function deleteJson(path: string, headers?: Record<string, string>) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "DELETE",
+    headers
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(`${path} failed (${response.status}): ${JSON.stringify(payload)}`);
+  }
+  return payload;
+}
+
 async function main() {
   const child = spawn(process.execPath, ["app/backend/dist/server.js"], {
     cwd: process.cwd(),
@@ -29,7 +60,8 @@ async function main() {
       ...process.env,
       NODE_ENV: "production",
       OPEN_BROWSER: "false",
-      BACKEND_PORT: port
+      BACKEND_PORT: port,
+      DATABASE_PATH: smokeDatabasePath
     }
   });
 
@@ -37,29 +69,55 @@ async function main() {
     await delay(4000);
 
     const health = (await getJson("/api/health")) as { ok: boolean };
+    const dashboard = (await getJson("/api/dashboard")) as { totalStoredMatches: number };
     const heroes = (await getJson("/api/heroes/stats")) as Array<{ heroId: number }>;
 
-    if (!heroes.length) {
-      throw new Error("No heroes available in local dataset for smoke test.");
+    let testedMatchId: number | null = null;
+    if (heroes.length) {
+      const hero = await getJson(`/api/heroes/${heroes[0].heroId}`);
+      const heroMatches = (hero as { recentMatches: Array<{ matchId: number }> }).recentMatches;
+
+      if (heroMatches.length) {
+        testedMatchId = heroMatches[0].matchId;
+        await getJson(`/api/matches/${testedMatchId}`);
+      }
     }
 
-    const hero = await getJson(`/api/heroes/${heroes[0].heroId}`);
-    const heroMatches = (hero as { recentMatches: Array<{ matchId: number }> }).recentMatches;
-
-    if (heroMatches.length) {
-      await getJson(`/api/matches/${heroMatches[0].matchId}`);
+    const draftOwnerHeaders = { "x-draft-owner-key": "smoketestdraftownerkey" };
+    const draftId = `smoke-${Date.now()}`;
+    await postJson(
+      "/api/draft-plans",
+      {
+        id: draftId,
+        leagueId: 1,
+        name: "Smoke draft",
+        firstTeamId: null,
+        secondTeamId: null,
+        updatedAt: Date.now(),
+        slots: [{ id: `${draftId}-0`, side: "first", kind: "ban", label: "B1", heroIds: [heroes[0]?.heroId ?? 1] }]
+      },
+      draftOwnerHeaders
+    );
+    const draftPlans = (await getJson("/api/draft-plans?leagueId=1", draftOwnerHeaders)) as Array<{ id: string }>;
+    if (!draftPlans.some((draft) => draft.id === draftId)) {
+      throw new Error("Draft plan smoke create was not readable.");
     }
+    await deleteJson(`/api/draft-plans/${draftId}`, draftOwnerHeaders);
 
     if (!health.ok) {
       throw new Error("Health check returned not ok.");
+    }
+    if (typeof dashboard.totalStoredMatches !== "number") {
+      throw new Error("Dashboard smoke check did not return a match count.");
     }
 
     console.log(
       JSON.stringify(
         {
           ok: true,
-          heroId: heroes[0].heroId,
-          testedMatchId: heroMatches[0]?.matchId ?? null
+          dashboardMatches: dashboard.totalStoredMatches,
+          heroId: heroes[0]?.heroId ?? null,
+          testedMatchId
         },
         null,
         2
