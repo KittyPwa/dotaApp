@@ -229,6 +229,30 @@ export const providerRequestEvents = sqliteTable(
   })
 );
 
+export const providerEnrichmentQueue = sqliteTable(
+  "provider_enrichment_queue",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    matchId: integer("match_id").notNull().references(() => matches.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    status: text("status").notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: integer("next_attempt_at", { mode: "timestamp_ms" }).notNull(),
+    lastAttemptAt: integer("last_attempt_at", { mode: "timestamp_ms" }),
+    lastError: text("last_error"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`)
+  },
+  (table) => ({
+    matchProviderUnique: uniqueIndex("provider_enrichment_queue_match_provider_unique").on(table.matchId, table.provider),
+    statusNextAttemptIdx: index("provider_enrichment_queue_status_next_attempt_idx").on(table.status, table.nextAttemptAt)
+  })
+);
+
 export const schema = {
   players,
   heroes,
@@ -241,5 +265,6 @@ export const schema = {
   draftPlans,
   rawApiPayloads,
   settings,
-  providerRequestEvents
+  providerRequestEvents,
+  providerEnrichmentQueue
 };

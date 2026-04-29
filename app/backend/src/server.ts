@@ -9,6 +9,7 @@ import { closeDb, runMigrations } from "./db/client.js";
 import { config } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
 import { SettingsService } from "./services/settingsService.js";
+import { providerEnrichmentWorker } from "./services/providerEnrichmentWorker.js";
 
 const app = Fastify({
   logger: false,
@@ -79,6 +80,7 @@ const address = await app.listen({
 });
 
 logger.info("Backend listening", { address });
+providerEnrichmentWorker.start();
 
 if (config.openBrowser && config.nodeEnv === "production") {
   try {
@@ -91,6 +93,7 @@ if (config.openBrowser && config.nodeEnv === "production") {
 }
 
 const shutdown = async () => {
+  providerEnrichmentWorker.stop();
   await app.close();
   closeDb();
   process.exit(0);

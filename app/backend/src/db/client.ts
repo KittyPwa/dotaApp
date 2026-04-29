@@ -66,6 +66,22 @@ export function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS draft_plans_owner_league_idx
       ON draft_plans(owner_key, league_id);
+    CREATE TABLE IF NOT EXISTS provider_enrichment_queue (
+      id integer primary key autoincrement,
+      match_id integer not null references matches(id) on delete cascade,
+      provider text not null,
+      status text not null default 'queued',
+      attempts integer not null default 0,
+      next_attempt_at integer not null,
+      last_attempt_at integer,
+      last_error text,
+      created_at integer not null default (unixepoch() * 1000),
+      updated_at integer not null default (unixepoch() * 1000)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS provider_enrichment_queue_match_provider_unique
+      ON provider_enrichment_queue(match_id, provider);
+    CREATE INDEX IF NOT EXISTS provider_enrichment_queue_status_next_attempt_idx
+      ON provider_enrichment_queue(status, next_attempt_at);
   `);
   ensureColumn("players", "rank_tier", "integer");
   ensureColumn("players", "leaderboard_rank", "integer");

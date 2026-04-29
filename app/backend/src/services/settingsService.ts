@@ -21,6 +21,20 @@ const STRATZ_PER_SECOND_CAP_KEY = "stratzPerSecondCap";
 const STRATZ_PER_MINUTE_CAP_KEY = "stratzPerMinuteCap";
 const STRATZ_PER_HOUR_CAP_KEY = "stratzPerHourCap";
 const STRATZ_DAILY_REQUEST_CAP_KEY = "stratzDailyRequestCap";
+const OPEN_DOTA_PER_SECOND_CAP_KEY = "openDotaPerSecondCap";
+const OPEN_DOTA_PER_MINUTE_CAP_KEY = "openDotaPerMinuteCap";
+const OPEN_DOTA_PER_HOUR_CAP_KEY = "openDotaPerHourCap";
+const OPEN_DOTA_DAILY_REQUEST_CAP_KEY = "openDotaDailyRequestCap";
+const STEAM_PER_SECOND_CAP_KEY = "steamPerSecondCap";
+const STEAM_PER_MINUTE_CAP_KEY = "steamPerMinuteCap";
+const STEAM_PER_HOUR_CAP_KEY = "steamPerHourCap";
+const STEAM_DAILY_REQUEST_CAP_KEY = "steamDailyRequestCap";
+const PROVIDER_ENRICHMENT_DAILY_REQUEST_CAP_KEY = "providerEnrichmentDailyRequestCap";
+const PROVIDER_ENRICHMENT_MAX_ATTEMPTS_KEY = "providerEnrichmentMaxAttempts";
+const PROVIDER_ENRICHMENT_WORKER_ENABLED_KEY = "providerEnrichmentWorkerEnabled";
+const PROVIDER_ENRICHMENT_WORKER_INTERVAL_MINUTES_KEY = "providerEnrichmentWorkerIntervalMinutes";
+const PROVIDER_ENRICHMENT_WORKER_SCAN_LIMIT_KEY = "providerEnrichmentWorkerScanLimit";
+const PROVIDER_ENRICHMENT_WORKER_JOBS_PER_RUN_KEY = "providerEnrichmentWorkerJobsPerRun";
 const ADMIN_PASSWORD_HASH_KEY = "adminPasswordHash";
 
 function hashPassword(password: string) {
@@ -101,6 +115,19 @@ export class SettingsService {
     const parsedStratzPerMinuteCap = Number(map.get(STRATZ_PER_MINUTE_CAP_KEY));
     const parsedStratzPerHourCap = Number(map.get(STRATZ_PER_HOUR_CAP_KEY));
     const parsedStratzDailyRequestCap = Number(map.get(STRATZ_DAILY_REQUEST_CAP_KEY));
+    const parsedOpenDotaPerSecondCap = Number(map.get(OPEN_DOTA_PER_SECOND_CAP_KEY));
+    const parsedOpenDotaPerMinuteCap = Number(map.get(OPEN_DOTA_PER_MINUTE_CAP_KEY));
+    const parsedOpenDotaPerHourCap = Number(map.get(OPEN_DOTA_PER_HOUR_CAP_KEY));
+    const parsedOpenDotaDailyRequestCap = Number(map.get(OPEN_DOTA_DAILY_REQUEST_CAP_KEY));
+    const parsedSteamPerSecondCap = Number(map.get(STEAM_PER_SECOND_CAP_KEY));
+    const parsedSteamPerMinuteCap = Number(map.get(STEAM_PER_MINUTE_CAP_KEY));
+    const parsedSteamPerHourCap = Number(map.get(STEAM_PER_HOUR_CAP_KEY));
+    const parsedSteamDailyRequestCap = Number(map.get(STEAM_DAILY_REQUEST_CAP_KEY));
+    const parsedProviderEnrichmentDailyRequestCap = Number(map.get(PROVIDER_ENRICHMENT_DAILY_REQUEST_CAP_KEY));
+    const parsedProviderEnrichmentMaxAttempts = Number(map.get(PROVIDER_ENRICHMENT_MAX_ATTEMPTS_KEY));
+    const parsedProviderWorkerIntervalMinutes = Number(map.get(PROVIDER_ENRICHMENT_WORKER_INTERVAL_MINUTES_KEY));
+    const parsedProviderWorkerScanLimit = Number(map.get(PROVIDER_ENRICHMENT_WORKER_SCAN_LIMIT_KEY));
+    const parsedProviderWorkerJobsPerRun = Number(map.get(PROVIDER_ENRICHMENT_WORKER_JOBS_PER_RUN_KEY));
     const storedAdminPasswordHash = map.get(ADMIN_PASSWORD_HASH_KEY);
     const adminProtectionEnabled = Boolean(storedAdminPasswordHash);
     const adminUnlocked = options?.includeProtected === true || !adminProtectionEnabled || options?.adminUnlocked === true;
@@ -122,6 +149,32 @@ export class SettingsService {
       stratzDailyRequestCap: Number.isFinite(parsedStratzDailyRequestCap)
         ? Math.min(100000, Math.max(1, parsedStratzDailyRequestCap))
         : 10000,
+      openDotaPerSecondCap: Number.isFinite(parsedOpenDotaPerSecondCap) ? Math.min(1000, Math.max(1, parsedOpenDotaPerSecondCap)) : 5,
+      openDotaPerMinuteCap: Number.isFinite(parsedOpenDotaPerMinuteCap) ? Math.min(10000, Math.max(1, parsedOpenDotaPerMinuteCap)) : 60,
+      openDotaPerHourCap: Number.isFinite(parsedOpenDotaPerHourCap) ? Math.min(100000, Math.max(1, parsedOpenDotaPerHourCap)) : 1000,
+      openDotaDailyRequestCap: Number.isFinite(parsedOpenDotaDailyRequestCap)
+        ? Math.min(100000, Math.max(1, parsedOpenDotaDailyRequestCap))
+        : 5000,
+      steamPerSecondCap: Number.isFinite(parsedSteamPerSecondCap) ? Math.min(1000, Math.max(1, parsedSteamPerSecondCap)) : 2,
+      steamPerMinuteCap: Number.isFinite(parsedSteamPerMinuteCap) ? Math.min(10000, Math.max(1, parsedSteamPerMinuteCap)) : 60,
+      steamPerHourCap: Number.isFinite(parsedSteamPerHourCap) ? Math.min(100000, Math.max(1, parsedSteamPerHourCap)) : 1000,
+      steamDailyRequestCap: Number.isFinite(parsedSteamDailyRequestCap) ? Math.min(100000, Math.max(1, parsedSteamDailyRequestCap)) : 5000,
+      providerEnrichmentDailyRequestCap: Number.isFinite(parsedProviderEnrichmentDailyRequestCap)
+        ? Math.min(100000, Math.max(1, parsedProviderEnrichmentDailyRequestCap))
+        : 1000,
+      providerEnrichmentMaxAttempts: Number.isFinite(parsedProviderEnrichmentMaxAttempts)
+        ? Math.min(20, Math.max(1, parsedProviderEnrichmentMaxAttempts))
+        : 3,
+      providerEnrichmentWorkerEnabled: map.get(PROVIDER_ENRICHMENT_WORKER_ENABLED_KEY) === "true",
+      providerEnrichmentWorkerIntervalMinutes: Number.isFinite(parsedProviderWorkerIntervalMinutes)
+        ? Math.min(1440, Math.max(1, parsedProviderWorkerIntervalMinutes))
+        : 30,
+      providerEnrichmentWorkerScanLimit: Number.isFinite(parsedProviderWorkerScanLimit)
+        ? Math.min(1000, Math.max(1, parsedProviderWorkerScanLimit))
+        : 200,
+      providerEnrichmentWorkerJobsPerRun: Number.isFinite(parsedProviderWorkerJobsPerRun)
+        ? Math.min(25, Math.max(1, parsedProviderWorkerJobsPerRun))
+        : 5,
       appMode: config.appMode,
       adminUnlocked,
       adminPasswordConfigured: adminProtectionEnabled
@@ -361,6 +414,87 @@ export class SettingsService {
         target: settings.key,
         set: {
           value: String(Math.min(100000, Math.max(1, input.stratzDailyRequestCap))),
+          updatedAt: now
+        }
+      });
+
+    const numericCaps: Array<[string, number, number]> = [
+      [OPEN_DOTA_PER_SECOND_CAP_KEY, input.openDotaPerSecondCap, 1000],
+      [OPEN_DOTA_PER_MINUTE_CAP_KEY, input.openDotaPerMinuteCap, 10000],
+      [OPEN_DOTA_PER_HOUR_CAP_KEY, input.openDotaPerHourCap, 100000],
+      [OPEN_DOTA_DAILY_REQUEST_CAP_KEY, input.openDotaDailyRequestCap, 100000],
+      [STEAM_PER_SECOND_CAP_KEY, input.steamPerSecondCap, 1000],
+      [STEAM_PER_MINUTE_CAP_KEY, input.steamPerMinuteCap, 10000],
+      [STEAM_PER_HOUR_CAP_KEY, input.steamPerHourCap, 100000],
+      [STEAM_DAILY_REQUEST_CAP_KEY, input.steamDailyRequestCap, 100000],
+      [PROVIDER_ENRICHMENT_DAILY_REQUEST_CAP_KEY, input.providerEnrichmentDailyRequestCap, 100000],
+      [PROVIDER_ENRICHMENT_MAX_ATTEMPTS_KEY, input.providerEnrichmentMaxAttempts, 20]
+    ];
+
+    for (const [key, value, max] of numericCaps) {
+      const normalized = String(Math.min(max, Math.max(1, value)));
+      await db
+        .insert(settings)
+        .values({ key, value: normalized, updatedAt: now })
+        .onConflictDoUpdate({
+          target: settings.key,
+          set: { value: normalized, updatedAt: now }
+        });
+    }
+
+    await db
+      .insert(settings)
+      .values({
+        key: PROVIDER_ENRICHMENT_WORKER_ENABLED_KEY,
+        value: input.providerEnrichmentWorkerEnabled ? "true" : "false",
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value: input.providerEnrichmentWorkerEnabled ? "true" : "false", updatedAt: now }
+      });
+
+    await db
+      .insert(settings)
+      .values({
+        key: PROVIDER_ENRICHMENT_WORKER_INTERVAL_MINUTES_KEY,
+        value: String(Math.min(1440, Math.max(1, input.providerEnrichmentWorkerIntervalMinutes))),
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: {
+          value: String(Math.min(1440, Math.max(1, input.providerEnrichmentWorkerIntervalMinutes))),
+          updatedAt: now
+        }
+      });
+
+    await db
+      .insert(settings)
+      .values({
+        key: PROVIDER_ENRICHMENT_WORKER_SCAN_LIMIT_KEY,
+        value: String(Math.min(1000, Math.max(1, input.providerEnrichmentWorkerScanLimit))),
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: {
+          value: String(Math.min(1000, Math.max(1, input.providerEnrichmentWorkerScanLimit))),
+          updatedAt: now
+        }
+      });
+
+    await db
+      .insert(settings)
+      .values({
+        key: PROVIDER_ENRICHMENT_WORKER_JOBS_PER_RUN_KEY,
+        value: String(Math.min(25, Math.max(1, input.providerEnrichmentWorkerJobsPerRun))),
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: {
+          value: String(Math.min(25, Math.max(1, input.providerEnrichmentWorkerJobsPerRun))),
           updatedAt: now
         }
       });

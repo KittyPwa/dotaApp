@@ -18,13 +18,26 @@ import { StratzAdapter, type StratzLeagueMatch, type StratzMatchTelemetry, type 
 import { ValveDotaAdapter, type ValveLeagueMatch, type ValveMatchDetails } from "../adapters/valveDota.js";
 import { AnalyticsService } from "../analytics/analyticsService.js";
 import { db, sqliteDb } from "../db/client.js";
-import { drafts, heroes, items, leagues, matchPlayers, matches, patches, players, rawApiPayloads, teams } from "../db/schema.js";
+import {
+  drafts,
+  heroes,
+  items,
+  leagues,
+  matchPlayers,
+  matches,
+  patches,
+  players,
+  providerEnrichmentQueue,
+  rawApiPayloads,
+  teams
+} from "../db/schema.js";
 import { config } from "../utils/config.js";
 import { buildAssetProxyUrl, defaultHeroIconPath, defaultHeroPortraitPath, defaultItemImagePath } from "../utils/assets.js";
 import { logger } from "../utils/logger.js";
 import { RawPayloadService } from "./rawPayloadService.js";
 import { ReferenceDataService } from "./referenceDataService.js";
 import { SettingsService } from "./settingsService.js";
+import { ProviderRateLimitService } from "./providerRateLimitService.js";
 
 function parseJsonValue<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
@@ -52,6 +65,9 @@ type BrowserPreferencesOverrides = {
 };
 
 type DraftContextSide = "first" | "second";
+
+type EnrichmentProvider = "stratz" | "opendota_parse";
+type EnrichmentStatus = "queued" | "waiting" | "full" | "failed" | "expired" | "unavailable";
 
 type AbilityMetadata = {
   abilityName: string;
@@ -85,6 +101,7 @@ export class DotaDataService {
   private readonly rawPayloads = new RawPayloadService();
   private readonly settingsService = new SettingsService();
   private readonly analyticsService = new AnalyticsService();
+  private readonly rateLimitService = new ProviderRateLimitService();
 
   private uniquePositiveIds(ids: number[]) {
     return ids.filter((id, index, list) => Number.isInteger(id) && id > 0 && list.indexOf(id) === index);
@@ -873,6 +890,288 @@ export class DotaDataService {
         }
       };
     }
+  }
+
+  private isOverviewFullyEnriched(overview: MatchOverview) {
+    return (
+      overview.telemetryStatus.effective.timelines &&
+      overview.telemetryStatus.effective.itemTimings &&
+      overview.telemetryStatus.effective.vision
+    );
+  }
+
+  private upsertEnrichmentQueueEntry(matchId: number, provider: EnrichmentProvider, nextAttemptAt = Date.now()) {
+    sqliteDb
+      .prepare(
+        `
+          insert into provider_enrichment_queue (
+            match_id,
+            provider,
+            status,
+            attempts,
+            next_attempt_at,
+            created_at,
+            updated_at
+          )
+          values (?, ?, 'queued', 0, ?, ?, ?)
+          on conflict(match_id, provider) do update set
+            status = case
+              when provider_enrichment_queue.status in ('full', 'expired', 'unavailable') then provider_enrichment_queue.status
+              else 'queued'
+            end,
+            next_attempt_at = case
+              when provider_enrichment_queue.status in ('full', 'expired', 'unavailable') then provider_enrichment_queue.next_attempt_at
+              else min(provider_enrichment_queue.next_attempt_at, excluded.next_attempt_at)
+            end,
+            updated_at = excluded.updated_at
+        `
+      )
+      .run(matchId, provider, nextAttemptAt, Date.now(), Date.now());
+  }
+
+  async getProviderEnrichmentQueueSummary() {
+    const counts = sqliteDb
+      .prepare(
+        `
+          select provider, status, count(*) as count
+          from provider_enrichment_queue
+          group by provider, status
+          order by provider, status
+        `
+      )
+      .all() as Array<{ provider: EnrichmentProvider; status: EnrichmentStatus; count: number }>;
+    const [due] = sqliteDb
+      .prepare(
+        `
+          select count(*) as count
+          from provider_enrichment_queue
+          where status in ('queued', 'failed', 'waiting')
+            and next_attempt_at <= ?
+        `
+      )
+      .all(Date.now()) as Array<{ count: number }>;
+    const [next] = sqliteDb
+      .prepare(
+        `
+          select min(next_attempt_at) as nextAttemptAt
+          from provider_enrichment_queue
+          where status in ('queued', 'failed', 'waiting')
+        `
+      )
+      .all() as Array<{ nextAttemptAt: number | null }>;
+    const enrichedMatchCandidates = sqliteDb
+      .prepare(
+        `
+          select
+            q.match_id as matchId,
+            q.provider,
+            q.last_attempt_at as enrichedAt,
+            m.start_time as startTime
+          from provider_enrichment_queue q
+          left join matches m on m.id = q.match_id
+          where q.status = 'full'
+          order by coalesce(q.last_attempt_at, q.updated_at) desc
+          limit 100
+        `
+      )
+      .all() as Array<{ matchId: number; provider: EnrichmentProvider; enrichedAt: number | null; startTime: number | null }>;
+    const parsedDataByMatchId = await this.getMatchParsedDataMap(enrichedMatchCandidates.map((match) => match.matchId));
+    const enrichedMatches = enrichedMatchCandidates
+      .filter((match) => parsedDataByMatchId.get(match.matchId)?.label === "Full")
+      .slice(0, 20);
+
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
+    const providerUsage = [
+      {
+        provider: "stratz" as const,
+        usage: this.rateLimitService.getUsage("stratz"),
+        limits: {
+          perSecond: settings.stratzPerSecondCap,
+          perMinute: settings.stratzPerMinuteCap,
+          perHour: settings.stratzPerHourCap,
+          perDay: settings.stratzDailyRequestCap
+        }
+      },
+      {
+        provider: "opendota" as const,
+        usage: this.rateLimitService.getUsage("opendota"),
+        limits: {
+          perSecond: settings.openDotaPerSecondCap,
+          perMinute: settings.openDotaPerMinuteCap,
+          perHour: settings.openDotaPerHourCap,
+          perDay: settings.openDotaDailyRequestCap
+        }
+      },
+      {
+        provider: "steam" as const,
+        usage: this.rateLimitService.getUsage("steam"),
+        limits: {
+          perSecond: settings.steamPerSecondCap,
+          perMinute: settings.steamPerMinuteCap,
+          perHour: settings.steamPerHourCap,
+          perDay: settings.steamDailyRequestCap
+        }
+      },
+      {
+        provider: "enrichment" as const,
+        usage: this.rateLimitService.getUsage("provider_enrichment"),
+        limits: {
+          perSecond: 1000,
+          perMinute: 10000,
+          perHour: 100000,
+          perDay: settings.providerEnrichmentDailyRequestCap
+        }
+      }
+    ];
+
+    return {
+      counts,
+      dueCount: due?.count ?? 0,
+      nextAttemptAt: next?.nextAttemptAt ?? null,
+      providerUsage,
+      enrichedMatches
+    };
+  }
+
+  async enqueueProviderEnrichmentCandidates(options?: { limit?: number }) {
+    const limit = Math.min(Math.max(options?.limit ?? 200, 1), 1000);
+    const now = Date.now();
+    const openDotaReplayWindowMs = 10 * 24 * 60 * 60 * 1000;
+    const rows = sqliteDb
+      .prepare(
+        `
+          select id, start_time as startTime
+          from matches
+          order by coalesce(start_time, 0) desc
+          limit ?
+        `
+      )
+      .all(limit) as Array<{ id: number; startTime: number | null }>;
+
+    let stratzQueued = 0;
+    let openDotaParseQueued = 0;
+
+    for (const row of rows) {
+      this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
+      stratzQueued += 1;
+
+      if (row.startTime && row.startTime >= now - openDotaReplayWindowMs) {
+        this.upsertEnrichmentQueueEntry(row.id, "opendota_parse", now);
+        openDotaParseQueued += 1;
+      }
+    }
+
+    return {
+      scannedMatches: rows.length,
+      stratzQueued,
+      openDotaParseQueued,
+      summary: await this.getProviderEnrichmentQueueSummary()
+    };
+  }
+
+  private markProviderEnrichmentAttempt(
+    id: number,
+    status: EnrichmentStatus,
+    options?: { nextAttemptAt?: number; lastError?: string | null }
+  ) {
+    sqliteDb
+      .prepare(
+        `
+          update provider_enrichment_queue
+          set
+            status = ?,
+            attempts = attempts + 1,
+            last_attempt_at = ?,
+            next_attempt_at = ?,
+            last_error = ?,
+            updated_at = ?
+          where id = ?
+        `
+      )
+      .run(status, Date.now(), options?.nextAttemptAt ?? Date.now(), options?.lastError ?? null, Date.now(), id);
+  }
+
+  async processProviderEnrichmentQueue(options?: { limit?: number }) {
+    const limit = Math.min(Math.max(options?.limit ?? 5, 1), 25);
+    const now = Date.now();
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
+    const rows = sqliteDb
+      .prepare(
+        `
+          select id, match_id as matchId, provider, attempts
+          from provider_enrichment_queue
+          where status in ('queued', 'failed', 'waiting')
+            and next_attempt_at <= ?
+          order by next_attempt_at asc, id asc
+          limit ?
+        `
+      )
+      .all(now, limit) as Array<{ id: number; matchId: number; provider: EnrichmentProvider; attempts: number }>;
+
+    const processed: Array<{ matchId: number; provider: EnrichmentProvider; status: EnrichmentStatus; message: string | null }> = [];
+
+    for (const row of rows) {
+      try {
+        this.rateLimitService.consume("provider_enrichment", {
+          perSecond: 1000,
+          perMinute: 10000,
+          perHour: 100000,
+          perDay: settings.providerEnrichmentDailyRequestCap
+        });
+
+        if (row.provider === "opendota_parse") {
+          const adapter = await this.createOpenDotaAdapter();
+          const result = await adapter.requestMatchParse(row.matchId);
+          await this.rawPayloads.store({
+            provider: "opendota",
+            entityType: "match_parse_request",
+            entityId: String(row.matchId),
+            fetchedAt: result.fetchedAt,
+            rawJson: result.payload,
+            parseVersion: "opendota-parse-request-v1"
+          });
+          const message = result.payload.message ?? result.payload.error ?? "OpenDota parse request accepted or queued.";
+          const nextAttempts = row.attempts + 1;
+          const status = result.payload.error
+            ? nextAttempts >= settings.providerEnrichmentMaxAttempts
+              ? "unavailable"
+              : "failed"
+            : "waiting";
+          this.markProviderEnrichmentAttempt(row.id, status, {
+            nextAttemptAt: now + (result.payload.error ? 6 : 1) * 60 * 60 * 1000,
+            lastError: result.payload.error ?? null
+          });
+          processed.push({ matchId: row.matchId, provider: row.provider, status, message });
+          continue;
+        }
+
+        const overview = await this.getMatchOverview(row.matchId, { forceRefresh: true });
+        const full = this.isOverviewFullyEnriched(overview);
+        const message = overview.telemetryStatus.stratz.message;
+        const nextAttempts = row.attempts + 1;
+        const status = full ? "full" : nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "waiting";
+        this.markProviderEnrichmentAttempt(row.id, status, {
+          nextAttemptAt: full || status === "unavailable" ? now : now + 6 * 60 * 60 * 1000,
+          lastError: full ? null : message
+        });
+        processed.push({ matchId: row.matchId, provider: row.provider, status, message });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Provider enrichment failed.";
+        const isRateLimit = message.includes("rate limit reached");
+        const nextAttempts = row.attempts + (isRateLimit ? 0 : 1);
+        const status = !isRateLimit && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "failed";
+        this.markProviderEnrichmentAttempt(row.id, status, {
+          nextAttemptAt: isRateLimit ? now + 60 * 60 * 1000 : now + Math.min(24, row.attempts + 1) * 60 * 60 * 1000,
+          lastError: message
+        });
+        processed.push({ matchId: row.matchId, provider: row.provider, status, message });
+      }
+    }
+
+    return {
+      processed,
+      summary: await this.getProviderEnrichmentQueueSummary()
+    };
   }
 
   async ensureReferenceData() {

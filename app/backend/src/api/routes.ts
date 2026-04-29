@@ -7,6 +7,7 @@ import { checkDbHealth, db } from "../db/client.js";
 import { draftPlans } from "../db/schema.js";
 import { getCachedAssetBuffer, getCachedCurrentDotaMapBuffer, getMimeType } from "../utils/assets.js";
 import { config } from "../utils/config.js";
+import { providerEnrichmentWorker } from "../services/providerEnrichmentWorker.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   const service = new DotaDataService();
@@ -356,6 +357,45 @@ export async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to refresh match." };
+    }
+  });
+
+  app.get("/api/provider-enrichment", { config: expensiveReadRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    return {
+      ...(await service.getProviderEnrichmentQueueSummary()),
+      worker: providerEnrichmentWorker.getStatus()
+    };
+  });
+
+  app.post("/api/provider-enrichment/enqueue", { config: expensiveWriteRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    const body = z.object({ limit: z.number().int().positive().max(1000).optional() }).parse(request.body ?? {});
+    try {
+      return await service.enqueueProviderEnrichmentCandidates({ limit: body.limit });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to enqueue provider enrichment." };
+    }
+  });
+
+  app.post("/api/provider-enrichment/process", { config: expensiveWriteRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    const body = z.object({ limit: z.number().int().positive().max(25).optional() }).parse(request.body ?? {});
+    try {
+      return await service.processProviderEnrichmentQueue({ limit: body.limit });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to process provider enrichment." };
     }
   });
 

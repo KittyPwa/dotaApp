@@ -1,5 +1,7 @@
 import { fetchJsonWithRetry } from "../utils/http.js";
 import type { ProviderFetchResult } from "../domain/provider.js";
+import { ProviderRateLimitService } from "../services/providerRateLimitService.js";
+import { SettingsService } from "../services/settingsService.js";
 
 interface ValveMatchHistoryResponse {
   result?: {
@@ -111,6 +113,8 @@ export interface ValveMatchDetails {
 
 export class ValveDotaAdapter {
   private readonly baseUrl = "https://api.steampowered.com/IDOTA2Match_570";
+  private readonly rateLimitService = new ProviderRateLimitService();
+  private readonly settingsService = new SettingsService();
 
   constructor(private readonly apiKey: string | null) {}
 
@@ -128,6 +132,17 @@ export class ValveDotaAdapter {
     return url;
   }
 
+  private async fetch<T>(input: RequestInfo | URL, init: RequestInit): Promise<T> {
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
+    this.rateLimitService.consume("steam", {
+      perSecond: settings.steamPerSecondCap,
+      perMinute: settings.steamPerMinuteCap,
+      perHour: settings.steamPerHourCap,
+      perDay: settings.steamDailyRequestCap
+    });
+    return fetchJsonWithRetry<T>(input, init, { provider: "valve" });
+  }
+
   async getLeagueMatches(leagueId: number, limit: number): Promise<ProviderFetchResult<ValveLeagueMatch[]>> {
     const fetchedAt = Date.now();
     const requested = Math.min(100, Math.max(1, limit));
@@ -136,10 +151,9 @@ export class ValveDotaAdapter {
     url.searchParams.set("matches_requested", String(requested));
     url.searchParams.set("tournament_games_only", "1");
 
-    const payload = await fetchJsonWithRetry<ValveMatchHistoryResponse>(
+    const payload = await this.fetch<ValveMatchHistoryResponse>(
       url,
-      { headers: { Accept: "application/json", "User-Agent": "DotaLocalAnalytics/1.0" } },
-      { provider: "valve" }
+      { headers: { Accept: "application/json", "User-Agent": "DotaLocalAnalytics/1.0" } }
     );
 
     const result = payload.result;
@@ -163,10 +177,9 @@ export class ValveDotaAdapter {
     const url = this.buildUrl("/GetMatchDetails/v1/");
     url.searchParams.set("match_id", String(matchId));
 
-    const payload = await fetchJsonWithRetry<ValveMatchDetailsResponse>(
+    const payload = await this.fetch<ValveMatchDetailsResponse>(
       url,
-      { headers: { Accept: "application/json", "User-Agent": "DotaLocalAnalytics/1.0" } },
-      { provider: "valve" }
+      { headers: { Accept: "application/json", "User-Agent": "DotaLocalAnalytics/1.0" } }
     );
 
     const result = payload.result;

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { IconImage } from "../components/IconImage";
-import { MetricGrid } from "../components/MetricGrid";
 import { Page } from "../components/Page";
 import { EmptyState, LoadingState } from "../components/State";
 import {
@@ -33,7 +32,7 @@ type HeroOption = {
   winrate: number;
 };
 
-type PickerFilter = "attribute" | "league" | "first-team" | "second-team" | "player-comforts" | "combos";
+type PickerFilter = "attribute" | "league";
 type PlayerComfortColumn = {
   playerId: number | null;
   name: string;
@@ -67,21 +66,18 @@ function DraftHeroChip({
   return (
     <button type="button" className="draft-hero-chip" onClick={onRemove} title={hero?.heroName ?? "Unknown hero"}>
       <IconImage src={hero?.heroIconUrl} alt={hero?.heroName ?? "Unknown hero"} size="sm" />
-      <span>{hero?.heroName ?? "Unknown"}</span>
     </button>
   );
 }
 
 function DraftSlotCard({
   slot,
-  order,
   side,
   heroesById,
   onOpenPicker,
   onChange
 }: {
   slot: DraftSlot;
-  order: number;
   side: DraftSide;
   heroesById: Map<number, HeroOption>;
   onOpenPicker: () => void;
@@ -92,9 +88,7 @@ function DraftSlotCard({
   return (
     <div className={`draft-slot-card ${slot.kind} ${side}`}>
       <div className="draft-slot-label">
-        <small>{order}</small>
         <strong>{slot.label}</strong>
-        <span>{slot.kind}</span>
       </div>
       <div className="draft-slot-variants">
         {variants.map((heroId) => (
@@ -307,52 +301,35 @@ function HeroPickerModal({
   open,
   slot,
   heroOptions,
-  firstTeamHeroes,
-  secondTeamHeroes,
-  playerComfortColumns,
   currentSlotHeroIds,
   heroDraftState,
-  combos,
   onClose,
   onPick
 }: {
   open: boolean;
   slot: DraftSlot | null;
   heroOptions: HeroOption[];
-  firstTeamHeroes: HeroOption[];
-  secondTeamHeroes: HeroOption[];
-  playerComfortColumns: PlayerComfortColumn[];
   currentSlotHeroIds: Set<number>;
   heroDraftState: Map<number, HeroDraftState>;
-  combos: DraftCombo[];
   onClose: () => void;
   onPick: (heroId: number) => void;
 }) {
   const [filter, setFilter] = useState<PickerFilter>("attribute");
   const [search, setSearch] = useState("");
-  const [comboSide, setComboSide] = useState<DraftSide>("first");
   if (!open || !slot) return null;
 
-  const firstTeamIds = new Set(firstTeamHeroes.map((hero) => hero.heroId));
-  const secondTeamIds = new Set(secondTeamHeroes.map((hero) => hero.heroId));
   const searchedHeroes = heroOptions.filter((hero) => hero.heroName.toLowerCase().includes(search.trim().toLowerCase()));
-  const filteredHeroes =
-    filter === "first-team"
-      ? searchedHeroes.filter((hero) => firstTeamIds.has(hero.heroId))
-      : filter === "second-team"
-        ? searchedHeroes.filter((hero) => secondTeamIds.has(hero.heroId))
-        : searchedHeroes;
   const attrGroups = ["Strength", "Agility", "Intelligence", "Universal"].map((label) => ({
     label,
-    heroes: filteredHeroes.filter((hero) => normalizeAttr(hero.primaryAttr) === label)
+    heroes: searchedHeroes.filter((hero) => normalizeAttr(hero.primaryAttr) === label)
   }));
   const groups =
     filter === "attribute"
       ? attrGroups
       : [
           {
-            label: filter === "league" ? "League pick rate" : filter === "first-team" ? "First side pool" : "Second side pool",
-            heroes: filteredHeroes
+            label: "League pick rate",
+            heroes: searchedHeroes
           }
         ];
 
@@ -375,10 +352,7 @@ function HeroPickerModal({
           <div className="segmented-control">
             {[
               ["attribute", "Attributes"],
-              ["league", "League"],
-              ["first-team", "First team"],
-              ["second-team", "Second team"],
-              ["player-comforts", "Player comforts"]
+              ["league", "League"]
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -391,69 +365,26 @@ function HeroPickerModal({
             ))}
           </div>
         </div>
-        {filter === "player-comforts" ? (
-          <div className="draft-player-comforts">
-            {playerComfortColumns.map((column) => (
-              <section key={`${column.side}-${column.playerId ?? column.name}`} className={`draft-player-comfort-column ${column.side}`}>
-                <h3>{column.name}</h3>
-                <div>
-                  {column.heroes.slice(0, 10).map((hero) => (
-                    <button
-                      key={hero.heroId}
-                      type="button"
-                      className={heroButtonClass(hero.heroId, currentSlotHeroIds, heroDraftState, true)}
-                      title={`${hero.heroName} | ${formatNumber(hero.games)} games | ${hero.winrate}%`}
-                      onClick={() => onPick(hero.heroId)}
-                    >
-                      <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="sm" />
-                      <span>
-                        {formatNumber(hero.games)} | {column.totalGames ? Math.round((hero.games / column.totalGames) * 100) : 0}%
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        ) : filter === "combos" ? (
-          <div className="draft-combo-sections tree-mode">
-            <div className="segmented-control draft-combo-side-tabs">
-              {(["first", "second"] as DraftSide[]).map((side) => (
-                <button key={side} type="button" className={comboSide === side ? "active" : ""} onClick={() => setComboSide(side)}>
-                  {side === "first" ? "First side combos" : "Second side combos"}
-                </button>
-              ))}
-            </div>
-            <ComboRelationshipGraph
-              side={comboSide}
-              combos={combos}
-              currentSlotHeroIds={currentSlotHeroIds}
-              heroDraftState={heroDraftState}
-              onPick={onPick}
-            />
-          </div>
-        ) : (
-          <div className="draft-picker-groups">
-            {groups.map((group) => (
-              <section key={group.label} className="draft-picker-group">
-                <h3>{group.label}</h3>
-                <div className="draft-picker-hero-grid">
-                  {group.heroes.map((hero) => (
-                    <button
+        <div className={`draft-picker-groups ${filter === "league" ? "full-width" : ""}`}>
+          {groups.map((group) => (
+            <section key={group.label} className="draft-picker-group">
+              <h3>{group.label}</h3>
+              <div className="draft-picker-hero-grid">
+                {group.heroes.map((hero) => (
+                  <button
                     key={hero.heroId}
                     type="button"
                     className={heroButtonClass(hero.heroId, currentSlotHeroIds, heroDraftState)}
-                      title={`${hero.heroName} | ${formatNumber(hero.games)} games | ${hero.winrate}%`}
-                      onClick={() => onPick(hero.heroId)}
-                    >
-                      <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="md" />
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        )}
+                    title={`${hero.heroName} | ${formatNumber(hero.games)} games | ${hero.winrate}%`}
+                    onClick={() => onPick(hero.heroId)}
+                  >
+                    <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="md" />
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -486,6 +417,59 @@ function SuggestionList({
         <EmptyState label="No local hero data for this filter yet." />
       )}
     </Card>
+  );
+}
+
+function DraftTeamContextPanel({
+  title,
+  teamName,
+  heroes,
+  comfortColumns,
+  side
+}: {
+  title: string;
+  teamName: string;
+  heroes: HeroOption[];
+  comfortColumns: PlayerComfortColumn[];
+  side: DraftSide;
+}) {
+  return (
+    <aside className={`draft-team-context ${side}`}>
+      <div>
+        <span>{title}</span>
+        <h3>{teamName}</h3>
+      </div>
+      <section>
+        <h4>Team pool</h4>
+        <div className="draft-context-hero-strip">
+          {heroes.slice(0, 12).map((hero) => (
+            <span key={hero.heroId} title={`${hero.heroName} | ${formatNumber(hero.games)} games`}>
+              <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="sm" />
+            </span>
+          ))}
+          {!heroes.length ? <small>No team hero data yet.</small> : null}
+        </div>
+      </section>
+      <section>
+        <h4>Player comforts</h4>
+        <div className="draft-context-comforts">
+          {comfortColumns.map((column) => (
+            <div key={`${column.side}-${column.playerId ?? column.name}`} className="draft-context-comfort-column">
+              <strong>{column.name}</strong>
+              <div>
+                {column.heroes.slice(0, 6).map((hero) => (
+                  <span key={hero.heroId} title={`${hero.heroName} | ${formatNumber(hero.games)} games | ${hero.winrate}%`}>
+                    <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="sm" />
+                    <small>{formatNumber(hero.games)}</small>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          {!comfortColumns.length ? <small>Assign a team with local data to see comfort picks.</small> : null}
+        </div>
+      </section>
+    </aside>
   );
 }
 
@@ -545,7 +529,9 @@ export function DraftsPage() {
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
     if (leagueId) next.set("leagueId", String(leagueId));
+    else next.delete("leagueId");
     if (selectedDraftId) next.set("draftId", selectedDraftId);
+    else next.delete("draftId");
     setSearchParams(next, { replace: true });
   }, [leagueId, selectedDraftId]);
 
@@ -555,15 +541,40 @@ export function DraftsPage() {
   );
 
   useEffect(() => {
-    if (!selectedDraftId && leagueDrafts[0]) {
-      setSelectedDraftId(leagueDrafts[0].id);
-    }
-    if (selectedDraftId && leagueDrafts.length > 0 && !leagueDrafts.some((draft) => draft.id === selectedDraftId)) {
-      setSelectedDraftId(leagueDrafts[0].id);
+    if (selectedDraftId && !leagueDrafts.some((draft) => draft.id === selectedDraftId)) {
+      setSelectedDraftId(null);
     }
   }, [leagueDrafts, selectedDraftId]);
 
   const teams = league.data?.teams ?? [];
+  const draftGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        title: string;
+        drafts: Array<{ draft: DraftPlan; matchup: string }>;
+      }
+    >();
+    const ensureGroup = (key: string, title: string) => {
+      const existing = groups.get(key);
+      if (existing) return existing;
+      const group = { key, title, drafts: [] };
+      groups.set(key, group);
+      return group;
+    };
+
+    for (const draft of leagueDrafts) {
+      const ownerTeamId = draft.firstTeamId ?? draft.secondTeamId;
+      const ownerName = getTeamName(teams, ownerTeamId) ?? "Unassigned";
+      const opponentTeamId = ownerTeamId === draft.firstTeamId ? draft.secondTeamId : draft.firstTeamId;
+      const opponentName = getTeamName(teams, opponentTeamId);
+      const matchup = opponentName ? `vs ${opponentName}` : "No opponent assigned";
+      ensureGroup(ownerTeamId ? `team-${ownerTeamId}` : "unassigned", ownerName).drafts.push({ draft, matchup });
+    }
+
+    return [...groups.values()].sort((left, right) => left.title.localeCompare(right.title));
+  }, [leagueDrafts, teams]);
   const heroOptions = useMemo<HeroOption[]>(() => {
     const needle = heroSearch.trim().toLowerCase();
     return [...(heroStats.data ?? [])]
@@ -589,13 +600,15 @@ export function DraftsPage() {
     saveDraft.mutate(nextDraft);
   };
 
-  const createDraft = () => {
+  const createDraft = (options?: { firstTeamId?: number | null; secondTeamId?: number | null }) => {
     if (!leagueId) return;
     const draft = createEmptyDraft(leagueId, `Draft ${leagueDrafts.length + 1}`);
     const firstTeamId = Number(searchParams.get("firstTeamId"));
     const secondTeamId = Number(searchParams.get("secondTeamId"));
-    if (Number.isInteger(firstTeamId) && firstTeamId > 0) draft.firstTeamId = firstTeamId;
-    if (Number.isInteger(secondTeamId) && secondTeamId > 0) draft.secondTeamId = secondTeamId;
+    if (options && "firstTeamId" in options) draft.firstTeamId = options.firstTeamId ?? null;
+    else if (Number.isInteger(firstTeamId) && firstTeamId > 0) draft.firstTeamId = firstTeamId;
+    if (options && "secondTeamId" in options) draft.secondTeamId = options.secondTeamId ?? null;
+    else if (Number.isInteger(secondTeamId) && secondTeamId > 0) draft.secondTeamId = secondTeamId;
     const nextDrafts = [draft, ...drafts];
     setDrafts(nextDrafts);
     saveDraft.mutate(draft);
@@ -608,6 +621,14 @@ export function DraftsPage() {
     setDrafts(nextDrafts);
     setSelectedDraftId(nextDrafts.find((draft) => draft.leagueId === leagueId)?.id ?? null);
     deleteDraft.mutate({ draftId: selectedDraft.id, leagueId });
+  };
+
+  const removeDraftById = (draftId: string) => {
+    if (!leagueId) return;
+    const nextDrafts = drafts.filter((draft) => draft.id !== draftId);
+    setDrafts(nextDrafts);
+    if (selectedDraftId === draftId) setSelectedDraftId(null);
+    deleteDraft.mutate({ draftId, leagueId });
   };
 
   const updateSlot = (slotId: string, heroIds: number[]) => {
@@ -784,25 +805,12 @@ export function DraftsPage() {
   const currentSlotHeroIds = useMemo(() => new Set(pickerSlot?.heroIds ?? []), [pickerSlot?.heroIds]);
 
   return (
-    <Page
-      title="Drafts"
-      aside={
-        <div className="action-group">
-          <button type="button" onClick={createDraft} disabled={!leagueId}>
-            New draft
-          </button>
-          {selectedDraft ? (
-            <button type="button" className="ghost-button" onClick={removeDraft}>
-              Delete
-            </button>
-          ) : null}
-        </div>
-      }
-    >
-      <div className="draft-layout">
-        <aside className="draft-sidebar">
-          <Card title="Scope">
-            <div className="stack">
+    <Page title="Drafts">
+      <div className={`draft-layout ${selectedDraft ? "editor" : ""}`}>
+        {!selectedDraft ? (
+          <section className="draft-scope-panel">
+            <h2>Scope</h2>
+            <div className="draft-scope-bar">
               <label>
                 League
                 <select
@@ -837,46 +845,39 @@ export function DraftsPage() {
                 <input value={heroSearch} onChange={(event) => setHeroSearch(event.target.value)} placeholder="Hero name" />
               </label>
             </div>
-          </Card>
-
-          <Card title="Drafts">
-            {leagueDrafts.length ? (
-              <div className="draft-list">
-                {leagueDrafts.map((draft) => (
-                  <button
-                    key={draft.id}
-                    type="button"
-                    className={draft.id === selectedDraftId ? "active" : ""}
-                    onClick={() => setSelectedDraftId(draft.id)}
-                  >
-                    <strong>{draft.name}</strong>
-                    <span>
-                      {getTeamName(teams, draft.firstTeamId) ?? "First pick"} vs{" "}
-                      {getTeamName(teams, draft.secondTeamId) ?? "Second pick"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <EmptyState label="No drafts saved for this league yet." />
-            )}
-          </Card>
-        </aside>
+          </section>
+        ) : null}
 
         <section className="draft-main">
           {league.isLoading || heroStats.isLoading || draftPlans.isLoading ? <LoadingState label="Loading draft context..." /> : null}
           {selectedDraft ? (
             <>
-              <Card>
-                <div className="draft-header-grid">
-                  <label>
-                    Draft name
-                    <input
-                      value={selectedDraft.name}
-                      onChange={(event) => updateDraft({ ...selectedDraft, name: event.target.value })}
-                    />
-                  </label>
-                  <label>
+              <div className="draft-editor-topbar">
+                <button type="button" className="ghost-button draft-back-button" onClick={() => setSelectedDraftId(null)}>
+                  Back to drafts
+                </button>
+              </div>
+
+              <HeroPickerModal
+                open={pickerSlot !== null}
+                slot={pickerSlot}
+                heroOptions={heroOptions}
+                currentSlotHeroIds={currentSlotHeroIds}
+                heroDraftState={heroDraftState}
+                onClose={() => setPickerSlotId(null)}
+                onPick={(heroId) => {
+                  if (!pickerSlot) return;
+                  if (pickerSlot.heroIds.includes(heroId)) {
+                    updateSlot(pickerSlot.id, pickerSlot.heroIds.filter((entry) => entry !== heroId));
+                    return;
+                  }
+                  updateSlot(pickerSlot.id, [...pickerSlot.heroIds, heroId]);
+                }}
+              />
+
+              <div className="draft-workspace">
+                <div className="draft-side-shell first">
+                  <label className="draft-side-select">
                     First pick side
                     <select
                       value={selectedDraft.firstTeamId ?? ""}
@@ -895,7 +896,75 @@ export function DraftsPage() {
                       ))}
                     </select>
                   </label>
-                  <label>
+                  <DraftTeamContextPanel
+                    title="First pick"
+                    teamName={getTeamName(teams, selectedDraft.firstTeamId) ?? "Unassigned"}
+                    heroes={firstTeamHeroes}
+                    comfortColumns={playerComfortColumns.filter((column) => column.side === "first")}
+                    side="first"
+                  />
+                </div>
+                <div className="draft-sequence-board">
+                  {selectedDraft.slots.map((slot) => (
+                    <div key={slot.id} className={`draft-sequence-row ${slot.kind}`}>
+                      <div className="draft-sequence-cell first">
+                        {slot.side === "first" ? (
+                          <div
+                            className={`draft-slot-wrapper ${slot.kind} ${targetSlotId === slot.id ? "active" : ""}`}
+                            onClick={() => setTargetSlotId(slot.id)}
+                          >
+                            <DraftSlotCard
+                              slot={slot}
+                              side="first"
+                              heroesById={heroesById}
+                              onOpenPicker={() => {
+                                setTargetSlotId(slot.id);
+                                setPickerSlotId(slot.id);
+                              }}
+                              onChange={(heroIds) => updateSlot(slot.id, heroIds)}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="draft-sequence-cell second">
+                        {slot.side === "second" ? (
+                          <div
+                            className={`draft-slot-wrapper ${slot.kind} ${targetSlotId === slot.id ? "active" : ""}`}
+                            onClick={() => setTargetSlotId(slot.id)}
+                          >
+                            <DraftSlotCard
+                              slot={slot}
+                              side="second"
+                              heroesById={heroesById}
+                              onOpenPicker={() => {
+                                setTargetSlotId(slot.id);
+                                setPickerSlotId(slot.id);
+                              }}
+                              onChange={(heroIds) => updateSlot(slot.id, heroIds)}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="draft-side-shell second">
+                  <div className="draft-editor-actions">
+                    <div className="draft-editor-button-row">
+                      <button type="button" onClick={() => createDraft()} disabled={!leagueId}>
+                        New draft
+                      </button>
+                      <button type="button" className="ghost-button" onClick={removeDraft}>
+                        Delete
+                      </button>
+                    </div>
+                    <input
+                      aria-label="Draft name"
+                      value={selectedDraft.name}
+                      onChange={(event) => updateDraft({ ...selectedDraft, name: event.target.value })}
+                    />
+                  </div>
+                  <label className="draft-side-select">
                     Second pick side
                     <select
                       value={selectedDraft.secondTeamId ?? ""}
@@ -914,86 +983,14 @@ export function DraftsPage() {
                       ))}
                     </select>
                   </label>
+                  <DraftTeamContextPanel
+                    title="Second pick"
+                    teamName={getTeamName(teams, selectedDraft.secondTeamId) ?? "Unassigned"}
+                    heroes={secondTeamHeroes}
+                    comfortColumns={playerComfortColumns.filter((column) => column.side === "second")}
+                    side="second"
+                  />
                 </div>
-              </Card>
-
-              <MetricGrid
-                items={[
-                  { label: "League", value: league.data?.name ?? "Unknown" },
-                  { label: "First pick", value: getTeamName(teams, selectedDraft.firstTeamId) ?? "Unassigned" },
-                  { label: "Second pick", value: getTeamName(teams, selectedDraft.secondTeamId) ?? "Unassigned" },
-                  { label: "Saved variants", value: formatNumber(selectedDraft.slots.reduce((sum, slot) => sum + slot.heroIds.length, 0)) }
-                ]}
-              />
-
-              <HeroPickerModal
-                open={pickerSlot !== null}
-                slot={pickerSlot}
-                heroOptions={heroOptions}
-                firstTeamHeroes={firstTeamHeroes}
-                secondTeamHeroes={secondTeamHeroes}
-                playerComfortColumns={playerComfortColumns}
-                currentSlotHeroIds={currentSlotHeroIds}
-                heroDraftState={heroDraftState}
-                combos={comboRows}
-                onClose={() => setPickerSlotId(null)}
-                onPick={(heroId) => {
-                  if (!pickerSlot) return;
-                  if (pickerSlot.heroIds.includes(heroId)) {
-                    updateSlot(pickerSlot.id, pickerSlot.heroIds.filter((entry) => entry !== heroId));
-                    return;
-                  }
-                  updateSlot(pickerSlot.id, [...pickerSlot.heroIds, heroId]);
-                }}
-              />
-
-              <div className="draft-sequence-board">
-                <div className="draft-sequence-header first">{getTeamName(teams, selectedDraft.firstTeamId) ?? "First pick side"}</div>
-                <div className="draft-sequence-header second">{getTeamName(teams, selectedDraft.secondTeamId) ?? "Second pick side"}</div>
-                {selectedDraft.slots.map((slot, index) => (
-                  <div key={slot.id} className={`draft-sequence-row ${slot.kind}`}>
-                    <div className="draft-sequence-cell first">
-                      {slot.side === "first" ? (
-                        <div
-                          className={`draft-slot-wrapper ${targetSlotId === slot.id ? "active" : ""}`}
-                          onClick={() => setTargetSlotId(slot.id)}
-                        >
-                          <DraftSlotCard
-                            slot={slot}
-                            order={index + 1}
-                            side="first"
-                            heroesById={heroesById}
-                            onOpenPicker={() => {
-                              setTargetSlotId(slot.id);
-                              setPickerSlotId(slot.id);
-                            }}
-                            onChange={(heroIds) => updateSlot(slot.id, heroIds)}
-                          />
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="draft-sequence-cell second">
-                      {slot.side === "second" ? (
-                        <div
-                          className={`draft-slot-wrapper ${targetSlotId === slot.id ? "active" : ""}`}
-                          onClick={() => setTargetSlotId(slot.id)}
-                        >
-                          <DraftSlotCard
-                            slot={slot}
-                            order={index + 1}
-                            side="second"
-                            heroesById={heroesById}
-                            onOpenPicker={() => {
-                              setTargetSlotId(slot.id);
-                              setPickerSlotId(slot.id);
-                            }}
-                            onChange={(heroIds) => updateSlot(slot.id, heroIds)}
-                          />
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
               </div>
 
               <div className="two-column draft-removed-context">
@@ -1030,7 +1027,45 @@ export function DraftsPage() {
               </div>
             </>
           ) : (
-            <EmptyState label={leagueId ? "Create a draft for this league." : "Select a league to start drafting."} />
+            <Card title="Draft library">
+              {leagueId ? (
+                <>
+                  <div className="draft-library-toolbar">
+                    <button type="button" onClick={() => createDraft()} disabled={!leagueId}>
+                      New draft
+                    </button>
+                  </div>
+                  {draftGroups.length ? (
+                    <div className="draft-library">
+                      {draftGroups.map((group) => (
+                        <section key={group.key} className="draft-library-group">
+                          <div className="draft-library-group-header">
+                            <h3>{group.title}</h3>
+                          </div>
+                          <div className="draft-library-links">
+                            {group.drafts.map(({ draft, matchup }) => (
+                              <div key={`${group.key}-${draft.id}`} className="draft-library-link">
+                                <button type="button" onClick={() => setSelectedDraftId(draft.id)}>
+                                  <strong>{draft.name}</strong>
+                                  <span>{matchup}</span>
+                                </button>
+                                <button type="button" className="ghost-button compact" onClick={() => removeDraftById(draft.id)}>
+                                  Delete
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState label="No saved drafts for this league yet." />
+                  )}
+                </>
+              ) : (
+                <EmptyState label="Select a league in Scope to start drafting." />
+              )}
+            </Card>
           )}
         </section>
       </div>

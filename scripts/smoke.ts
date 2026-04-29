@@ -25,6 +25,12 @@ async function getJson(path: string, headers?: Record<string, string>) {
   return body;
 }
 
+async function getStatus(path: string, headers?: Record<string, string>) {
+  const response = await fetch(`${baseUrl}${path}`, { headers });
+  const text = await response.text();
+  return { status: response.status, body: text };
+}
+
 async function postJson(path: string, body: unknown, headers?: Record<string, string>) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
@@ -71,6 +77,13 @@ async function main() {
     const health = (await getJson("/api/health")) as { ok: boolean };
     const dashboard = (await getJson("/api/dashboard")) as { totalStoredMatches: number };
     const heroes = (await getJson("/api/heroes/stats")) as Array<{ heroId: number }>;
+    const enrichmentRoute = await getStatus("/api/provider-enrichment");
+    if (enrichmentRoute.status === 404) {
+      throw new Error("Provider enrichment route is missing.");
+    }
+    if (![403, 200].includes(enrichmentRoute.status)) {
+      throw new Error(`/api/provider-enrichment returned unexpected status ${enrichmentRoute.status}: ${enrichmentRoute.body}`);
+    }
 
     let testedMatchId: number | null = null;
     if (heroes.length) {

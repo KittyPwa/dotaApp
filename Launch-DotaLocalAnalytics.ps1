@@ -106,6 +106,39 @@ function Invoke-LoggedCommand {
   }
 }
 
+function Test-BuildCurrent {
+  param(
+    [Parameter(Mandatory = $true)][string]$BackendEntry,
+    [Parameter(Mandatory = $true)][string]$FrontendEntry
+  )
+
+  if (-not (Test-Path $BackendEntry) -or -not (Test-Path $FrontendEntry)) {
+    return $false
+  }
+
+  $distNewest = (Get-ChildItem -Path @(
+      (Join-Path $scriptRoot "app\backend\dist"),
+      (Join-Path $scriptRoot "app\frontend\dist"),
+      (Join-Path $scriptRoot "app\shared\dist")
+    ) -Recurse -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1).LastWriteTime
+
+  $sourceNewest = (Get-ChildItem -Path @(
+      (Join-Path $scriptRoot "app\backend\src"),
+      (Join-Path $scriptRoot "app\frontend\src"),
+      (Join-Path $scriptRoot "app\shared\src")
+    ) -Recurse -File -Include *.ts,*.tsx,*.css -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1).LastWriteTime
+
+  if (-not $distNewest -or -not $sourceNewest) {
+    return $false
+  }
+
+  return ($distNewest -ge $sourceNewest)
+}
+
 function Test-Health {
   param([int]$TimeoutSeconds = 2)
   try {
@@ -226,8 +259,10 @@ if (-not (Test-Path (Join-Path $scriptRoot "node_modules"))) {
 
 $backendEntry = Join-Path $scriptRoot "app\backend\dist\server.js"
 $frontendEntry = Join-Path $scriptRoot "app\frontend\dist\index.html"
-if (-not (Test-Path $backendEntry) -or -not (Test-Path $frontendEntry)) {
+if (-not (Test-BuildCurrent -BackendEntry $backendEntry -FrontendEntry $frontendEntry)) {
   Invoke-LoggedCommand -FilePath $npmCmd -ArgumentList @("run", "build") -StepName "Building application"
+} else {
+  Write-Log "Build is current: yes"
 }
 
 $existingPid = Get-PortOwnerPid

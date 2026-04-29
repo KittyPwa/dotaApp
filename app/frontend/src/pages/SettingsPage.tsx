@@ -20,7 +20,16 @@ import { Card } from "../components/Card";
 import { CommunityGraphView } from "../components/CommunityGraphView";
 import { Page } from "../components/Page";
 import { ErrorState, LoadingState } from "../components/State";
-import { useCommunity, useSaveSettings, useSettings } from "../hooks/useQueries";
+import {
+  useCommunity,
+  useEnqueueProviderEnrichment,
+  useProcessProviderEnrichment,
+  useProviderEnrichment,
+  useSaveSettings,
+  useSettings,
+  type ProviderEnrichmentProcessResponse,
+  type ProviderEnrichmentEnqueueResponse
+} from "../hooks/useQueries";
 
 type SettingsTab = "players" | "leagues" | "data" | "providers" | "accessibility" | "diagnostics" | "community";
 
@@ -75,11 +84,28 @@ export function SettingsPage() {
   const [stratzPerMinuteCap, setStratzPerMinuteCap] = useState("250");
   const [stratzPerHourCap, setStratzPerHourCap] = useState("2000");
   const [stratzDailyRequestCap, setStratzDailyRequestCap] = useState("10000");
+  const [openDotaPerSecondCap, setOpenDotaPerSecondCap] = useState("5");
+  const [openDotaPerMinuteCap, setOpenDotaPerMinuteCap] = useState("60");
+  const [openDotaPerHourCap, setOpenDotaPerHourCap] = useState("1000");
+  const [openDotaDailyRequestCap, setOpenDotaDailyRequestCap] = useState("5000");
+  const [steamPerSecondCap, setSteamPerSecondCap] = useState("2");
+  const [steamPerMinuteCap, setSteamPerMinuteCap] = useState("60");
+  const [steamPerHourCap, setSteamPerHourCap] = useState("1000");
+  const [steamDailyRequestCap, setSteamDailyRequestCap] = useState("5000");
+  const [providerEnrichmentDailyRequestCap, setProviderEnrichmentDailyRequestCap] = useState("1000");
+  const [providerEnrichmentMaxAttempts, setProviderEnrichmentMaxAttempts] = useState("3");
   const [stratzTestPlayerId, setStratzTestPlayerId] = useState("148440404");
   const [backendDiag, setBackendDiag] = useState<string | null>(null);
   const [browserDiag, setBrowserDiag] = useState<string | null>(null);
   const [schemaDiag, setSchemaDiag] = useState<string | null>(null);
   const [diagRunning, setDiagRunning] = useState<null | "backend" | "browser" | "steam">(null);
+  const [enrichmentCandidateLimit, setEnrichmentCandidateLimit] = useState("200");
+  const [enrichmentProcessLimit, setEnrichmentProcessLimit] = useState("5");
+  const [providerWorkerEnabled, setProviderWorkerEnabled] = useState(false);
+  const [providerWorkerIntervalMinutes, setProviderWorkerIntervalMinutes] = useState("30");
+  const [providerWorkerScanLimit, setProviderWorkerScanLimit] = useState("200");
+  const [providerWorkerJobsPerRun, setProviderWorkerJobsPerRun] = useState("5");
+  const [enrichmentResult, setEnrichmentResult] = useState<string | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState("");
   const [adminUnlockError, setAdminUnlockError] = useState<string | null>(null);
@@ -117,6 +143,20 @@ export function SettingsPage() {
       setStratzPerMinuteCap(String(query.data.stratzPerMinuteCap));
       setStratzPerHourCap(String(query.data.stratzPerHourCap));
       setStratzDailyRequestCap(String(query.data.stratzDailyRequestCap));
+      setOpenDotaPerSecondCap(String(query.data.openDotaPerSecondCap));
+      setOpenDotaPerMinuteCap(String(query.data.openDotaPerMinuteCap));
+      setOpenDotaPerHourCap(String(query.data.openDotaPerHourCap));
+      setOpenDotaDailyRequestCap(String(query.data.openDotaDailyRequestCap));
+      setSteamPerSecondCap(String(query.data.steamPerSecondCap));
+      setSteamPerMinuteCap(String(query.data.steamPerMinuteCap));
+      setSteamPerHourCap(String(query.data.steamPerHourCap));
+      setSteamDailyRequestCap(String(query.data.steamDailyRequestCap));
+      setProviderEnrichmentDailyRequestCap(String(query.data.providerEnrichmentDailyRequestCap));
+      setProviderEnrichmentMaxAttempts(String(query.data.providerEnrichmentMaxAttempts));
+      setProviderWorkerEnabled(query.data.providerEnrichmentWorkerEnabled);
+      setProviderWorkerIntervalMinutes(String(query.data.providerEnrichmentWorkerIntervalMinutes));
+      setProviderWorkerScanLimit(String(query.data.providerEnrichmentWorkerScanLimit));
+      setProviderWorkerJobsPerRun(String(query.data.providerEnrichmentWorkerJobsPerRun));
       setStratzTestPlayerId(
         String(localPrimaryPlayerId ?? query.data.primaryPlayerId ?? localAutoRefreshPlayerIds[0] ?? 148440404)
       );
@@ -126,6 +166,9 @@ export function SettingsPage() {
   const adminProtectionEnabled = query.data?.adminPasswordConfigured ?? false;
   const adminUnlocked = query.data?.adminUnlocked ?? false;
   const communityQuery = useCommunity(adminUnlocked);
+  const providerEnrichment = useProviderEnrichment(adminUnlocked);
+  const enqueueProviderEnrichment = useEnqueueProviderEnrichment();
+  const processProviderEnrichment = useProcessProviderEnrichment();
   const canManagePersistentSettings = !adminProtectionEnabled || adminUnlocked;
   const canManageSessionPreferences = true;
   const sessionOnlyTab = activeTab === "data" || activeTab === "accessibility";
@@ -284,6 +327,25 @@ export function SettingsPage() {
             const parsedStratzPerMinuteCap = Math.min(10000, Math.max(1, Number(stratzPerMinuteCap.trim()) || 250));
             const parsedStratzPerHourCap = Math.min(100000, Math.max(1, Number(stratzPerHourCap.trim()) || 2000));
             const parsedStratzDailyRequestCap = Math.min(100000, Math.max(1, Number(stratzDailyRequestCap.trim()) || 10000));
+            const parsedOpenDotaPerSecondCap = Math.min(1000, Math.max(1, Number(openDotaPerSecondCap.trim()) || 5));
+            const parsedOpenDotaPerMinuteCap = Math.min(10000, Math.max(1, Number(openDotaPerMinuteCap.trim()) || 60));
+            const parsedOpenDotaPerHourCap = Math.min(100000, Math.max(1, Number(openDotaPerHourCap.trim()) || 1000));
+            const parsedOpenDotaDailyRequestCap = Math.min(100000, Math.max(1, Number(openDotaDailyRequestCap.trim()) || 5000));
+            const parsedSteamPerSecondCap = Math.min(1000, Math.max(1, Number(steamPerSecondCap.trim()) || 2));
+            const parsedSteamPerMinuteCap = Math.min(10000, Math.max(1, Number(steamPerMinuteCap.trim()) || 60));
+            const parsedSteamPerHourCap = Math.min(100000, Math.max(1, Number(steamPerHourCap.trim()) || 1000));
+            const parsedSteamDailyRequestCap = Math.min(100000, Math.max(1, Number(steamDailyRequestCap.trim()) || 5000));
+            const parsedProviderEnrichmentDailyRequestCap = Math.min(
+              100000,
+              Math.max(1, Number(providerEnrichmentDailyRequestCap.trim()) || 1000)
+            );
+            const parsedProviderEnrichmentMaxAttempts = Math.min(20, Math.max(1, Number(providerEnrichmentMaxAttempts.trim()) || 3));
+            const parsedProviderWorkerIntervalMinutes = Math.min(
+              1440,
+              Math.max(1, Number(providerWorkerIntervalMinutes.trim()) || 30)
+            );
+            const parsedProviderWorkerScanLimit = Math.min(1000, Math.max(1, Number(providerWorkerScanLimit.trim()) || 200));
+            const parsedProviderWorkerJobsPerRun = Math.min(25, Math.max(1, Number(providerWorkerJobsPerRun.trim()) || 5));
             if (activeTab === "players") {
               const nextPrimaryPlayerId =
                 Number.isInteger(parsedPrimaryPlayerId) && (parsedPrimaryPlayerId ?? 0) > 0 ? parsedPrimaryPlayerId : null;
@@ -327,6 +389,20 @@ export function SettingsPage() {
               stratzPerMinuteCap: parsedStratzPerMinuteCap,
               stratzPerHourCap: parsedStratzPerHourCap,
               stratzDailyRequestCap: parsedStratzDailyRequestCap,
+              openDotaPerSecondCap: parsedOpenDotaPerSecondCap,
+              openDotaPerMinuteCap: parsedOpenDotaPerMinuteCap,
+              openDotaPerHourCap: parsedOpenDotaPerHourCap,
+              openDotaDailyRequestCap: parsedOpenDotaDailyRequestCap,
+              steamPerSecondCap: parsedSteamPerSecondCap,
+              steamPerMinuteCap: parsedSteamPerMinuteCap,
+              steamPerHourCap: parsedSteamPerHourCap,
+              steamDailyRequestCap: parsedSteamDailyRequestCap,
+              providerEnrichmentDailyRequestCap: parsedProviderEnrichmentDailyRequestCap,
+              providerEnrichmentMaxAttempts: parsedProviderEnrichmentMaxAttempts,
+              providerEnrichmentWorkerEnabled: providerWorkerEnabled,
+              providerEnrichmentWorkerIntervalMinutes: parsedProviderWorkerIntervalMinutes,
+              providerEnrichmentWorkerScanLimit: parsedProviderWorkerScanLimit,
+              providerEnrichmentWorkerJobsPerRun: parsedProviderWorkerJobsPerRun,
               appMode: query.data?.appMode ?? "personal",
               adminUnlocked: query.data?.adminUnlocked ?? false,
               adminPasswordConfigured: query.data?.adminPasswordConfigured ?? false
@@ -470,6 +546,24 @@ export function SettingsPage() {
                   OpenDota API key
                   <input disabled={!canManagePersistentSettings} value={openDotaApiKey} onChange={(event) => setOpenDotaApiKey(event.target.value)} placeholder="Optional" />
                 </label>
+                <div className="two-column">
+                  <label>
+                    Per second cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={1000} step={1} value={openDotaPerSecondCap} onChange={(event) => setOpenDotaPerSecondCap(event.target.value)} />
+                  </label>
+                  <label>
+                    Per minute cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={10000} step={1} value={openDotaPerMinuteCap} onChange={(event) => setOpenDotaPerMinuteCap(event.target.value)} />
+                  </label>
+                  <label>
+                    Per hour cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={100000} step={1} value={openDotaPerHourCap} onChange={(event) => setOpenDotaPerHourCap(event.target.value)} />
+                  </label>
+                  <label>
+                    Per day cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={100000} step={1} value={openDotaDailyRequestCap} onChange={(event) => setOpenDotaDailyRequestCap(event.target.value)} />
+                  </label>
+                </div>
                 <p className="muted-inline">Used for public player/match/hero data. Optional for local MVP usage.</p>
               </Card>
               <Card title="STRATZ">
@@ -516,7 +610,296 @@ export function SettingsPage() {
                     placeholder="Used for Valve Dota match history and league sync"
                   />
                 </label>
+                <div className="two-column">
+                  <label>
+                    Per second cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={1000} step={1} value={steamPerSecondCap} onChange={(event) => setSteamPerSecondCap(event.target.value)} />
+                  </label>
+                  <label>
+                    Per minute cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={10000} step={1} value={steamPerMinuteCap} onChange={(event) => setSteamPerMinuteCap(event.target.value)} />
+                  </label>
+                  <label>
+                    Per hour cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={100000} step={1} value={steamPerHourCap} onChange={(event) => setSteamPerHourCap(event.target.value)} />
+                  </label>
+                  <label>
+                    Per day cap
+                    <input disabled={!canManagePersistentSettings} type="number" min={1} max={100000} step={1} value={steamDailyRequestCap} onChange={(event) => setSteamDailyRequestCap(event.target.value)} />
+                  </label>
+                </div>
                 <p className="muted-inline">Used for Valve league match listing and Steam-backed Dota endpoints.</p>
+              </Card>
+              <Card title="Provider enrichment queue">
+                <div className="stack compact">
+                  <p className="muted-inline">
+                    Queue basic matches for STRATZ telemetry enrichment and, when useful, OpenDota parse requests. The worker is conservative and
+                    processes small batches on a schedule you control.
+                  </p>
+                  <div className="two-column">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        disabled={!canManagePersistentSettings}
+                        checked={providerWorkerEnabled}
+                        onChange={(event) => setProviderWorkerEnabled(event.target.checked)}
+                      />
+                      <span>Run enrichment worker automatically</span>
+                    </label>
+                    <label>
+                      Wake every minutes
+                      <input
+                        type="number"
+                        min={1}
+                        max={1440}
+                        step={1}
+                        disabled={!canManagePersistentSettings}
+                        value={providerWorkerIntervalMinutes}
+                        onChange={(event) => setProviderWorkerIntervalMinutes(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Worker matches to scan
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        step={1}
+                        disabled={!canManagePersistentSettings}
+                        value={providerWorkerScanLimit}
+                        onChange={(event) => setProviderWorkerScanLimit(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Worker jobs per run
+                      <input
+                        type="number"
+                        min={1}
+                        max={25}
+                        step={1}
+                        disabled={!canManagePersistentSettings}
+                        value={providerWorkerJobsPerRun}
+                        onChange={(event) => setProviderWorkerJobsPerRun(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Enrichment daily budget
+                      <input
+                        type="number"
+                        min={1}
+                        max={100000}
+                        step={1}
+                        disabled={!canManagePersistentSettings}
+                        value={providerEnrichmentDailyRequestCap}
+                        onChange={(event) => setProviderEnrichmentDailyRequestCap(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Max attempts per provider job
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        step={1}
+                        disabled={!canManagePersistentSettings}
+                        value={providerEnrichmentMaxAttempts}
+                        onChange={(event) => setProviderEnrichmentMaxAttempts(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  {providerEnrichment.isLoading ? <LoadingState label="Loading provider queue..." /> : null}
+                  {providerEnrichment.error ? <ErrorState error={providerEnrichment.error as Error} /> : null}
+                  {providerEnrichment.data ? (
+                    <>
+                      <div className="metric-grid compact">
+                        <div className="metric-card">
+                          <span>Worker</span>
+                          <strong>
+                            {providerEnrichment.data.worker.running
+                              ? "Running"
+                              : providerEnrichment.data.worker.enabled
+                                ? "Enabled"
+                                : "Off"}
+                          </strong>
+                        </div>
+                        <div className="metric-card">
+                          <span>Due now</span>
+                          <strong>{providerEnrichment.data.dueCount}</strong>
+                        </div>
+                        <div className="metric-card">
+                          <span>Next attempt</span>
+                          <strong>
+                            {providerEnrichment.data.nextAttemptAt
+                              ? new Date(providerEnrichment.data.nextAttemptAt).toLocaleString()
+                              : "None"}
+                          </strong>
+                        </div>
+                        <div className="metric-card">
+                          <span>Last worker run</span>
+                          <strong>
+                            {providerEnrichment.data.worker.lastFinishedAt
+                              ? new Date(providerEnrichment.data.worker.lastFinishedAt).toLocaleString()
+                              : "Never"}
+                          </strong>
+                        </div>
+                        <div className="metric-card">
+                          <span>Next worker run</span>
+                          <strong>
+                            {providerEnrichment.data.worker.nextRunAt
+                              ? new Date(providerEnrichment.data.worker.nextRunAt).toLocaleString()
+                              : "None"}
+                          </strong>
+                        </div>
+                        <div className="metric-card">
+                          <span>Last processed</span>
+                          <strong>{providerEnrichment.data.worker.lastProcessedCount}</strong>
+                        </div>
+                      </div>
+                      {providerEnrichment.data.worker.lastQueued ? (
+                        <p className="muted-inline">
+                          Last worker scan: {providerEnrichment.data.worker.lastQueued.scannedMatches} matches,{" "}
+                          {providerEnrichment.data.worker.lastQueued.stratzQueued} STRATZ jobs,{" "}
+                          {providerEnrichment.data.worker.lastQueued.openDotaParseQueued} OpenDota parse jobs.
+                        </p>
+                      ) : null}
+                      {providerEnrichment.data.worker.lastError ? (
+                        <p className="form-error">{providerEnrichment.data.worker.lastError}</p>
+                      ) : null}
+                      <div className="provider-queue-counts">
+                        {providerEnrichment.data.counts.length ? (
+                          providerEnrichment.data.counts.map((entry) => (
+                            <span key={`${entry.provider}-${entry.status}`} className="queue-count-pill">
+                              {entry.provider} · {entry.status}: <strong>{entry.count}</strong>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="muted-inline">No provider queue entries yet.</span>
+                        )}
+                      </div>
+                      <div className="provider-enriched-list">
+                        <h3>Provider request usage</h3>
+                        <div className="responsive-table compact">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Provider</th>
+                                <th>Second</th>
+                                <th>Minute</th>
+                                <th>Hour</th>
+                                <th>Day</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {providerEnrichment.data.providerUsage.map((entry) => (
+                                <tr key={entry.provider}>
+                                  <td>{entry.provider}</td>
+                                  <td>{entry.usage.second} / {entry.limits.perSecond}</td>
+                                  <td>{entry.usage.minute} / {entry.limits.perMinute}</td>
+                                  <td>{entry.usage.hour} / {entry.limits.perHour}</td>
+                                  <td>{entry.usage.day} / {entry.limits.perDay}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      <div className="provider-enriched-list">
+                        <h3>Recently enriched matches</h3>
+                        {providerEnrichment.data.enrichedMatches.length ? (
+                          <div className="responsive-table compact">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Match</th>
+                                  <th>Provider</th>
+                                  <th>Enriched</th>
+                                  <th>Started</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {providerEnrichment.data.enrichedMatches.map((match) => (
+                                  <tr key={`${match.provider}-${match.matchId}`}>
+                                    <td>
+                                      <a href={`/matches/${match.matchId}`}>{match.matchId}</a>
+                                    </td>
+                                    <td>{match.provider}</td>
+                                    <td>{match.enrichedAt ? new Date(match.enrichedAt).toLocaleString() : "Unknown"}</td>
+                                    <td>{match.startTime ? new Date(match.startTime).toLocaleString() : "Unknown"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <span className="muted-inline">No fully enriched matches yet.</span>
+                        )}
+                      </div>
+                    </>
+                  ) : null}
+                  <div className="two-column">
+                    <label>
+                      Matches to scan
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        step={1}
+                        disabled={!canManagePersistentSettings || enqueueProviderEnrichment.isPending}
+                        value={enrichmentCandidateLimit}
+                        onChange={(event) => setEnrichmentCandidateLimit(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Jobs to process
+                      <input
+                        type="number"
+                        min={1}
+                        max={25}
+                        step={1}
+                        disabled={!canManagePersistentSettings || processProviderEnrichment.isPending}
+                        value={enrichmentProcessLimit}
+                        onChange={(event) => setEnrichmentProcessLimit(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <div className="action-group">
+                    <button
+                      type="button"
+                      disabled={!canManagePersistentSettings || enqueueProviderEnrichment.isPending}
+                      onClick={() => {
+                        const limit = Math.min(1000, Math.max(1, Number(enrichmentCandidateLimit) || 200));
+                        setEnrichmentResult(null);
+                        enqueueProviderEnrichment.mutate(limit, {
+                          onSuccess: (result: ProviderEnrichmentEnqueueResponse) => {
+                            setEnrichmentResult(
+                              `Scanned ${result.scannedMatches} matches. Queued ${result.stratzQueued} STRATZ and ${result.openDotaParseQueued} OpenDota parse jobs.`
+                            );
+                          },
+                          onError: (error) => setEnrichmentResult(error instanceof Error ? error.message : "Failed to enqueue provider jobs.")
+                        });
+                      }}
+                    >
+                      {enqueueProviderEnrichment.isPending ? "Enqueueing..." : "Enqueue missing telemetry"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canManagePersistentSettings || processProviderEnrichment.isPending}
+                      onClick={() => {
+                        const limit = Math.min(25, Math.max(1, Number(enrichmentProcessLimit) || 5));
+                        setEnrichmentResult(null);
+                        processProviderEnrichment.mutate(limit, {
+                          onSuccess: (result: ProviderEnrichmentProcessResponse) => {
+                            setEnrichmentResult(`Processed ${result.processed.length} jobs.`);
+                          },
+                          onError: (error) => setEnrichmentResult(error instanceof Error ? error.message : "Failed to process provider jobs.")
+                        });
+                      }}
+                    >
+                      {processProviderEnrichment.isPending ? "Processing..." : "Process queue now"}
+                    </button>
+                  </div>
+                  {enrichmentResult ? <p className="form-success">{enrichmentResult}</p> : null}
+                </div>
               </Card>
             </div>
           ) : null}

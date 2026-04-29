@@ -1,5 +1,7 @@
 import { fetchJsonWithRetry } from "../utils/http.js";
 import type { ProviderFetchResult } from "../domain/provider.js";
+import { ProviderRateLimitService } from "../services/providerRateLimitService.js";
+import { SettingsService } from "../services/settingsService.js";
 
 export interface OpenDotaPlayerProfileResponse {
   profile?: {
@@ -140,6 +142,15 @@ export type OpenDotaItemsResponse = Record<
   }
 >;
 
+export interface OpenDotaParseRequestResponse {
+  job?: {
+    jobId?: number;
+    type?: string;
+  };
+  message?: string;
+  error?: string;
+}
+
 export interface OpenDotaPatchResponseItem {
   id: number;
   name: string;
@@ -158,6 +169,8 @@ export type OpenDotaAbilitiesResponse = Record<
 
 export class OpenDotaAdapter {
   private readonly baseUrl = "https://api.opendota.com/api";
+  private readonly rateLimitService = new ProviderRateLimitService();
+  private readonly settingsService = new SettingsService();
 
   constructor(private readonly apiKey: string | null) {}
 
@@ -169,22 +182,31 @@ export class OpenDotaAdapter {
     return url;
   }
 
+  private async fetch<T>(input: RequestInfo | URL, init: RequestInit): Promise<T> {
+    const settings = await this.settingsService.getSettings({ includeProtected: true });
+    this.rateLimitService.consume("opendota", {
+      perSecond: settings.openDotaPerSecondCap,
+      perMinute: settings.openDotaPerMinuteCap,
+      perHour: settings.openDotaPerHourCap,
+      perDay: settings.openDotaDailyRequestCap
+    });
+    return fetchJsonWithRetry<T>(input, init, { provider: "opendota" });
+  }
+
   async getPlayerProfile(playerId: number): Promise<ProviderFetchResult<OpenDotaPlayerProfileResponse>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaPlayerProfileResponse>(
+    const payload = await this.fetch<OpenDotaPlayerProfileResponse>(
       this.buildUrl(`/players/${playerId}`),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getPlayerRecentMatches(playerId: number): Promise<ProviderFetchResult<OpenDotaRecentMatch[]>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaRecentMatch[]>(
+    const payload = await this.fetch<OpenDotaRecentMatch[]>(
       this.buildUrl(`/players/${playerId}/recentMatches`),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
@@ -195,30 +217,27 @@ export class OpenDotaAdapter {
     if (options?.days) {
       url.searchParams.set("date", String(options.days));
     }
-    const payload = await fetchJsonWithRetry<OpenDotaRecentMatch[]>(
+    const payload = await this.fetch<OpenDotaRecentMatch[]>(
       url,
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getPlayerWinLoss(playerId: number): Promise<ProviderFetchResult<OpenDotaPlayerWinLossResponse>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaPlayerWinLossResponse>(
+    const payload = await this.fetch<OpenDotaPlayerWinLossResponse>(
       this.buildUrl(`/players/${playerId}/wl`),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getLeagueMatches(leagueId: number): Promise<ProviderFetchResult<OpenDotaLeagueMatch[]>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaLeagueMatch[]>(
+    const payload = await this.fetch<OpenDotaLeagueMatch[]>(
       this.buildUrl(`/leagues/${leagueId}/matches`),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
@@ -236,10 +255,9 @@ export class OpenDotaAdapter {
         limit 500
       `
     );
-    const payload = await fetchJsonWithRetry<OpenDotaExplorerResponse<OpenDotaLeagueMatch>>(
+    const payload = await this.fetch<OpenDotaExplorerResponse<OpenDotaLeagueMatch>>(
       url,
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     if (payload.err) {
       throw new Error(payload.err);
@@ -249,60 +267,63 @@ export class OpenDotaAdapter {
 
   async getMatch(matchId: number): Promise<ProviderFetchResult<OpenDotaMatchResponse>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaMatchResponse>(
+    const payload = await this.fetch<OpenDotaMatchResponse>(
       this.buildUrl(`/matches/${matchId}`),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
+    );
+    return { payload, fetchedAt };
+  }
+
+  async requestMatchParse(matchId: number): Promise<ProviderFetchResult<OpenDotaParseRequestResponse>> {
+    const fetchedAt = Date.now();
+    const payload = await this.fetch<OpenDotaParseRequestResponse>(
+      this.buildUrl(`/request/${matchId}`),
+      { method: "POST", headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getHeroStats(): Promise<ProviderFetchResult<OpenDotaHeroStatsResponseItem[]>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaHeroStatsResponseItem[]>(
+    const payload = await this.fetch<OpenDotaHeroStatsResponseItem[]>(
       this.buildUrl("/heroStats"),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getItems(): Promise<ProviderFetchResult<OpenDotaItemsResponse>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaItemsResponse>(
+    const payload = await this.fetch<OpenDotaItemsResponse>(
       this.buildUrl("/constants/items"),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getPatches(): Promise<ProviderFetchResult<OpenDotaPatchResponseItem[]>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaPatchResponseItem[]>(
+    const payload = await this.fetch<OpenDotaPatchResponseItem[]>(
       this.buildUrl("/constants/patch"),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getAbilityIds(): Promise<ProviderFetchResult<OpenDotaAbilityIdsResponse>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaAbilityIdsResponse>(
+    const payload = await this.fetch<OpenDotaAbilityIdsResponse>(
       this.buildUrl("/constants/ability_ids"),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }
 
   async getAbilities(): Promise<ProviderFetchResult<OpenDotaAbilitiesResponse>> {
     const fetchedAt = Date.now();
-    const payload = await fetchJsonWithRetry<OpenDotaAbilitiesResponse>(
+    const payload = await this.fetch<OpenDotaAbilitiesResponse>(
       this.buildUrl("/constants/abilities"),
-      { headers: { Accept: "application/json" } },
-      { provider: "opendota" }
+      { headers: { Accept: "application/json" } }
     );
     return { payload, fetchedAt };
   }

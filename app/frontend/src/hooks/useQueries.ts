@@ -17,6 +17,49 @@ import type {
 } from "@dota/shared";
 import { apiDelete, apiGet, apiPost } from "../api/client";
 
+export type ProviderEnrichmentSummary = {
+  counts: Array<{ provider: "stratz" | "opendota_parse"; status: string; count: number }>;
+  dueCount: number;
+  nextAttemptAt: number | null;
+  providerUsage: Array<{
+    provider: "stratz" | "opendota" | "steam" | "enrichment";
+    usage: { second: number; minute: number; hour: number; day: number };
+    limits: { perSecond: number; perMinute: number; perHour: number; perDay: number };
+  }>;
+  worker: {
+    enabled: boolean;
+    running: boolean;
+    lastRunAt: number | null;
+    lastFinishedAt: number | null;
+    nextRunAt: number | null;
+    lastQueued: {
+      scannedMatches: number;
+      stratzQueued: number;
+      openDotaParseQueued: number;
+    } | null;
+    lastProcessedCount: number;
+    lastError: string | null;
+  };
+  enrichedMatches: Array<{
+    matchId: number;
+    provider: "stratz" | "opendota_parse";
+    enrichedAt: number | null;
+    startTime: number | null;
+  }>;
+};
+
+export type ProviderEnrichmentEnqueueResponse = {
+  scannedMatches: number;
+  stratzQueued: number;
+  openDotaParseQueued: number;
+  summary: ProviderEnrichmentSummary;
+};
+
+export type ProviderEnrichmentProcessResponse = {
+  processed: Array<{ matchId: number; provider: "stratz" | "opendota_parse"; status: string; message: string | null }>;
+  summary: ProviderEnrichmentSummary;
+};
+
 export function useDashboard() {
   return useQuery({
     queryKey: ["dashboard"],
@@ -204,6 +247,41 @@ export function useCommunity(enabled = true) {
   });
 }
 
+export function useProviderEnrichment(enabled = true) {
+  return useQuery({
+    queryKey: ["provider-enrichment"],
+    queryFn: () => apiGet<ProviderEnrichmentSummary>("/api/provider-enrichment"),
+    enabled,
+    refetchInterval: enabled ? 15_000 : false
+  });
+}
+
+export function useEnqueueProviderEnrichment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (limit: number) => apiPost<ProviderEnrichmentEnqueueResponse>("/api/provider-enrichment/enqueue", { limit }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["provider-enrichment"] });
+    }
+  });
+}
+
+export function useProcessProviderEnrichment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (limit: number) => apiPost<ProviderEnrichmentProcessResponse>("/api/provider-enrichment/process", { limit }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["provider-enrichment"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
+      await queryClient.invalidateQueries({ queryKey: ["player"] });
+      await queryClient.invalidateQueries({ queryKey: ["match"] });
+    }
+  });
+}
+
 export function useSaveSettings() {
   const queryClient = useQueryClient();
 
@@ -216,6 +294,7 @@ export function useSaveSettings() {
       await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
       await queryClient.invalidateQueries({ queryKey: ["hero"] });
       await queryClient.invalidateQueries({ queryKey: ["player-compare"] });
+      await queryClient.invalidateQueries({ queryKey: ["provider-enrichment"] });
     }
   });
 }
