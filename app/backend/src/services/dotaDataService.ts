@@ -645,25 +645,31 @@ export class DotaDataService {
   }
 
   private getTelemetryFlags(participants: MatchParticipant[]) {
+    const fullRosterTelemetry = participants.length >= 10;
+
     return {
-      timelines: participants.some(
+      timelines:
+        fullRosterTelemetry &&
+        participants.every(
+          (player) =>
+            player.goldTimeline.length > 0 &&
+            player.xpTimeline.length > 0 &&
+            player.lastHitsTimeline.length > 0 &&
+            player.heroDamageTimeline.length > 0 &&
+            player.damageTakenTimeline.length > 0
+        ),
+      itemTimings:
+        fullRosterTelemetry &&
+        participants.every((player) => Object.keys(player.firstPurchaseTimes).length > 0 || player.purchaseLog.length > 0),
+      vision:
+        fullRosterTelemetry &&
+        participants.some(
         (player) =>
-          player.goldTimeline.length > 0 ||
-          player.xpTimeline.length > 0 ||
-          player.lastHitsTimeline.length > 0 ||
-          player.heroDamageTimeline.length > 0 ||
-          player.damageTakenTimeline.length > 0
-      ),
-      itemTimings: participants.some(
-        (player) => Object.keys(player.firstPurchaseTimes).length > 0 || player.purchaseLog.length > 0
-      ),
-      vision: participants.some(
-        (player) =>
-          player.observerLog.length > 0 ||
-          player.sentryLog.length > 0 ||
-          (player.observerWardsPlaced ?? 0) > 0 ||
-          (player.sentryWardsPlaced ?? 0) > 0
-      )
+            player.observerLog.length > 0 ||
+            player.sentryLog.length > 0 ||
+            (player.observerWardsPlaced ?? 0) > 0 ||
+            (player.sentryWardsPlaced ?? 0) > 0
+        )
     };
   }
 
@@ -979,6 +985,48 @@ export class DotaDataService {
     const enrichedMatches = enrichedMatchCandidates
       .filter((match) => parsedDataByMatchId.get(match.matchId)?.label === "Full")
       .slice(0, 20);
+    const recentAttemptCandidates = sqliteDb
+      .prepare(
+        `
+          select
+            q.match_id as matchId,
+            q.provider,
+            q.status,
+            q.attempts,
+            q.last_attempt_at as attemptedAt,
+            q.next_attempt_at as nextAttemptAt,
+            q.last_error as lastError,
+            m.start_time as startTime
+          from provider_enrichment_queue q
+          left join matches m on m.id = q.match_id
+          where q.last_attempt_at is not null
+          order by q.last_attempt_at desc
+          limit 20
+        `
+      )
+      .all() as Array<{
+        matchId: number;
+        provider: EnrichmentProvider;
+        status: EnrichmentStatus;
+        attempts: number;
+        attemptedAt: number | null;
+        nextAttemptAt: number | null;
+        lastError: string | null;
+        startTime: number | null;
+      }>;
+    const recentAttemptParsedData = await this.getMatchParsedDataMap(
+      recentAttemptCandidates.map((attempt) => attempt.matchId)
+    );
+    const recentAttempts = recentAttemptCandidates.map((attempt) => ({
+      ...attempt,
+      parsedData: recentAttemptParsedData.get(attempt.matchId) ?? {
+        label: "Basic",
+        hasFullMatchPayload: false,
+        timelines: false,
+        itemTimings: false,
+        vision: false
+      }
+    }));
 
     const settings = await this.settingsService.getSettings({ includeProtected: true });
     const providerUsage = [
@@ -1029,8 +1077,32 @@ export class DotaDataService {
       dueCount: due?.count ?? 0,
       nextAttemptAt: next?.nextAttemptAt ?? null,
       providerUsage,
-      enrichedMatches
+      enrichedMatches,
+      recentAttempts
     };
+  }
+
+  private async requeueFalseFullEnrichmentEntries(matchIds: number[], nextAttemptAt: number) {
+    const parsedDataByMatchId = await this.getMatchParsedDataMap(matchIds);
+    const staleFullMatchIds = matchIds.filter((matchId) => parsedDataByMatchId.get(matchId)?.label !== "Full");
+    if (staleFullMatchIds.length === 0) return 0;
+
+    sqliteDb
+      .prepare(
+        `
+          update provider_enrichment_queue
+          set
+            status = 'waiting',
+            next_attempt_at = ?,
+            last_error = 'Previously marked full, but required telemetry is still incomplete.',
+            updated_at = ?
+          where status = 'full'
+            and provider = 'stratz'
+            and match_id in (${staleFullMatchIds.map(() => "?").join(",")})
+        `
+      )
+      .run(nextAttemptAt, Date.now(), ...staleFullMatchIds);
+    return staleFullMatchIds.length;
   }
 
   async enqueueProviderEnrichmentCandidates(options?: { limit?: number }) {
@@ -1047,6 +1119,10 @@ export class DotaDataService {
         `
       )
       .all(limit) as Array<{ id: number; startTime: number | null }>;
+    await this.requeueFalseFullEnrichmentEntries(
+      rows.map((row) => row.id),
+      now
+    );
 
     let stratzQueued = 0;
     let openDotaParseQueued = 0;

@@ -46,6 +46,23 @@ export type ProviderEnrichmentSummary = {
     enrichedAt: number | null;
     startTime: number | null;
   }>;
+  recentAttempts: Array<{
+    matchId: number;
+    provider: "stratz" | "opendota_parse";
+    status: string;
+    attempts: number;
+    attemptedAt: number | null;
+    nextAttemptAt: number | null;
+    lastError: string | null;
+    startTime: number | null;
+    parsedData: {
+      label: string;
+      hasFullMatchPayload: boolean;
+      timelines: boolean;
+      itemTimings: boolean;
+      vision: boolean;
+    };
+  }>;
 };
 
 export type ProviderEnrichmentEnqueueResponse = {

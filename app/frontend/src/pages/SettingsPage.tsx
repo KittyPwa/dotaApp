@@ -834,6 +834,53 @@ export function SettingsPage() {
                           <span className="muted-inline">No fully enriched matches yet.</span>
                         )}
                       </div>
+                      <div className="provider-enriched-list">
+                        <h3>Recent provider attempts</h3>
+                        {providerEnrichment.data.recentAttempts.length ? (
+                          <div className="responsive-table compact">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Match</th>
+                                  <th>Provider</th>
+                                  <th>Status</th>
+                                  <th>Parsed</th>
+                                  <th>Attempts</th>
+                                  <th>Attempted</th>
+                                  <th>Next</th>
+                                  <th>Reason</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {providerEnrichment.data.recentAttempts.map((attempt) => (
+                                  <tr key={`${attempt.provider}-${attempt.matchId}`}>
+                                    <td>
+                                      <a href={`/matches/${attempt.matchId}`}>{attempt.matchId}</a>
+                                    </td>
+                                    <td>{attempt.provider}</td>
+                                    <td>{attempt.status}</td>
+                                    <td>
+                                      {attempt.parsedData.label}
+                                      <span className="muted-inline">
+                                        {" "}
+                                        ({attempt.parsedData.timelines ? "timelines" : "no timelines"},{" "}
+                                        {attempt.parsedData.itemTimings ? "items" : "no items"},{" "}
+                                        {attempt.parsedData.vision ? "vision" : "no vision"})
+                                      </span>
+                                    </td>
+                                    <td>{attempt.attempts}</td>
+                                    <td>{attempt.attemptedAt ? new Date(attempt.attemptedAt).toLocaleString() : "Unknown"}</td>
+                                    <td>{attempt.nextAttemptAt ? new Date(attempt.nextAttemptAt).toLocaleString() : "None"}</td>
+                                    <td>{attempt.lastError ?? "No provider error recorded."}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <span className="muted-inline">No provider attempts have run yet.</span>
+                        )}
+                      </div>
                     </>
                   ) : null}
                   <div className="two-column">
