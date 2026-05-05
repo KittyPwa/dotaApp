@@ -28,6 +28,11 @@ interface StratzMatchTelemetryResponse {
         itemPurchases: Array<{ time: number; itemId: number | null }> | null;
       } | null;
     }> | null;
+  } | null;
+}
+
+interface StratzMatchWardTelemetryResponse {
+  match: {
     playbackData: {
       wardEvents: Array<{
         time: number;
@@ -226,16 +231,6 @@ export class StratzAdapter {
                 }
               }
             }
-            playbackData {
-              wardEvents {
-                time
-                fromPlayer
-                wardType
-                action
-                positionX
-                positionY
-              }
-            }
           }
         }
       `,
@@ -246,8 +241,39 @@ export class StratzAdapter {
       throw new Error(result.payload.errors[0]?.message ?? "STRATZ telemetry query failed.");
     }
 
+    let wardEvents: NonNullable<NonNullable<StratzMatchWardTelemetryResponse["match"]>["playbackData"]>["wardEvents"] = [];
+    let wardDiagnostic: string | null = null;
+    try {
+      const wardResult = await this.execute<StratzMatchWardTelemetryResponse>(
+        `
+          query MatchWardTelemetry($matchId: Long!) {
+            match(id: $matchId) {
+              playbackData {
+                wardEvents {
+                  time
+                  fromPlayer
+                  wardType
+                  action
+                  positionX
+                  positionY
+                }
+              }
+            }
+          }
+        `,
+        { matchId }
+      );
+      if (wardResult.payload.errors?.length) {
+        wardDiagnostic = wardResult.payload.errors[0]?.message ?? "STRATZ ward telemetry query failed.";
+      } else {
+        wardEvents = wardResult.payload.data?.match?.playbackData?.wardEvents ?? [];
+      }
+    } catch (error) {
+      wardDiagnostic = error instanceof Error ? error.message : "STRATZ ward telemetry query failed.";
+    }
+
     const match = result.payload.data?.match;
-    const wardEvents = (match?.playbackData?.wardEvents ?? []).filter(
+    const filteredWardEvents = wardEvents.filter(
       (event) =>
         event &&
         typeof event.time === "number" &&
@@ -256,7 +282,7 @@ export class StratzAdapter {
     );
 
     const players = (match?.players ?? []).map<StratzMatchTelemetryPlayer>((player) => {
-      const playerWardEvents = wardEvents.filter((event) => event.fromPlayer === player.playerSlot);
+      const playerWardEvents = filteredWardEvents.filter((event) => event.fromPlayer === player.playerSlot);
       const observerLog = playerWardEvents
         .filter((event) => event.wardType === "OBSERVER")
         .map((event) => ({
@@ -324,7 +350,7 @@ export class StratzAdapter {
             "players.stats.heroDamagePerMinute",
             "players.stats.heroDamageReceivedPerMinute",
             "players.stats.itemPurchases",
-            "match.playbackData.wardEvents"
+            ...(wardDiagnostic ? [`match.playbackData.wardEvents unavailable: ${wardDiagnostic}`] : ["match.playbackData.wardEvents"])
           ]
         }
       }
