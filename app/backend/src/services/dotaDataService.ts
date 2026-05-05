@@ -1279,7 +1279,13 @@ export class DotaDataService {
           from provider_enrichment_queue
           where status in ('queued', 'failed', 'waiting')
             and next_attempt_at <= ?
-          order by next_attempt_at asc, id asc
+          order by
+            case provider
+              when 'opendota_parse' then 0
+              else 1
+            end,
+            next_attempt_at asc,
+            id asc
           limit ?
         `
       )
@@ -1322,7 +1328,7 @@ export class DotaDataService {
           continue;
         }
 
-        const overview = await this.getMatchOverview(row.matchId, { forceRefresh: true });
+        const overview = await this.getMatchOverview(row.matchId);
         const full = this.isOverviewFullyEnriched(overview);
         const message = overview.telemetryStatus.stratz.message;
         const nextAttempts = row.attempts + 1;
