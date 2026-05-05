@@ -1304,6 +1304,31 @@ export class DotaDataService {
 
         if (row.provider === "opendota_parse") {
           const adapter = await this.createOpenDotaAdapter();
+          const matchResult = await adapter.getMatch(row.matchId);
+          await this.rawPayloads.store({
+            provider: "opendota",
+            entityType: "match",
+            entityId: String(row.matchId),
+            fetchedAt: matchResult.fetchedAt,
+            rawJson: matchResult.payload
+          });
+          await this.upsertDetailedMatch(db, matchResult.payload, matchResult.fetchedAt);
+
+          const parsedData = (await this.getMatchParsedDataMap([row.matchId])).get(row.matchId);
+          if (parsedData?.label === "Full") {
+            this.markProviderEnrichmentAttempt(row.id, "full", {
+              nextAttemptAt: now,
+              lastError: null
+            });
+            processed.push({
+              matchId: row.matchId,
+              provider: row.provider,
+              status: "full",
+              message: "OpenDota match payload is now fully parsed."
+            });
+            continue;
+          }
+
           const result = await adapter.requestMatchParse(row.matchId);
           await this.rawPayloads.store({
             provider: "opendota",
@@ -1313,7 +1338,8 @@ export class DotaDataService {
             rawJson: result.payload,
             parseVersion: "opendota-parse-request-v1"
           });
-          const message = result.payload.message ?? result.payload.error ?? "OpenDota parse request accepted or queued.";
+          const parseMessage = result.payload.message ?? result.payload.error ?? "OpenDota parse request accepted or queued.";
+          const message = `OpenDota match fetched (${parsedData?.label ?? "Basic"}); ${parseMessage}`;
           const nextAttempts = row.attempts + 1;
           const status = result.payload.error
             ? nextAttempts >= settings.providerEnrichmentMaxAttempts
@@ -1541,11 +1567,16 @@ export class DotaDataService {
     for (const row of rows) {
       if (row.matchId === null) continue;
       const stratzFlags = stratzFlagsByMatchId.get(row.matchId);
+      const openDotaFlags = {
+        timelines: Number(row.timelines ?? 0) >= 10,
+        itemTimings: Number(row.itemTimings ?? 0) >= 10,
+        vision: Number(row.vision ?? 0) > 0
+      };
       const flags = {
         hasFullMatchPayload: matchIdsWithRawPayload.has(row.matchId),
-        timelines: Boolean(stratzFlags?.timelines),
-        itemTimings: Boolean(stratzFlags?.itemTimings),
-        vision: Boolean(stratzFlags?.vision)
+        timelines: openDotaFlags.timelines || Boolean(stratzFlags?.timelines),
+        itemTimings: openDotaFlags.itemTimings || Boolean(stratzFlags?.itemTimings),
+        vision: openDotaFlags.vision || Boolean(stratzFlags?.vision)
       };
       fallback.set(row.matchId, {
         ...flags,
