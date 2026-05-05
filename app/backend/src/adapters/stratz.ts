@@ -12,12 +12,20 @@ export interface StratzPlayerBasicResponse {
   player: { steamAccountId: number | null } | null;
 }
 
-interface StratzMatchTelemetryResponse {
+interface StratzMatchPlayersResponse {
   match: {
     players: Array<{
       playerSlot: number | null;
       steamAccountId: number | null;
       heroId: number | null;
+    }> | null;
+  } | null;
+}
+
+interface StratzMatchTimelineTelemetryResponse {
+  match: {
+    players: Array<{
+      playerSlot: number | null;
       stats: {
         goldPerMinute: number[] | null;
         experiencePerMinute: number[] | null;
@@ -25,6 +33,16 @@ interface StratzMatchTelemetryResponse {
         deniesPerMinute: number[] | null;
         heroDamagePerMinute: number[] | null;
         heroDamageReceivedPerMinute: number[] | null;
+      } | null;
+    }> | null;
+  } | null;
+}
+
+interface StratzMatchPurchaseTelemetryResponse {
+  match: {
+    players: Array<{
+      playerSlot: number | null;
+      stats: {
         itemPurchases: Array<{ time: number; itemId: number | null }> | null;
       } | null;
     }> | null;
@@ -213,36 +231,96 @@ export class StratzAdapter {
   }
 
   async getMatchTelemetry(matchId: number): Promise<ProviderFetchResult<StratzMatchTelemetry>> {
-    const result = await this.execute<StratzMatchTelemetryResponse>(
+    const result = await this.execute<StratzMatchPlayersResponse>(
       `
-        query MatchTelemetry($matchId: Long!) {
+        query MatchPlayers($matchId: Long!) {
           match(id: $matchId) {
             players {
               playerSlot
               steamAccountId
               heroId
-              stats {
-                goldPerMinute
-                experiencePerMinute
-                lastHitsPerMinute
-                deniesPerMinute
-                heroDamagePerMinute
-                heroDamageReceivedPerMinute
-                itemPurchases {
-                  time
-                  itemId
-                }
-              }
             }
           }
         }
       `,
       { matchId },
-      "MatchTelemetry"
+      "MatchPlayers"
     );
 
     if (result.payload.errors?.length) {
-      throw new Error(result.payload.errors[0]?.message ?? "STRATZ telemetry query failed.");
+      throw new Error(result.payload.errors[0]?.message ?? "STRATZ match players query failed.");
+    }
+
+    const timelineBySlot = new Map<number, NonNullable<NonNullable<StratzMatchTimelineTelemetryResponse["match"]>["players"]>[number]["stats"]>();
+    let timelineDiagnostic: string | null = null;
+    try {
+      const timelineResult = await this.execute<StratzMatchTimelineTelemetryResponse>(
+        `
+          query MatchPlayerTimelines($matchId: Long!) {
+            match(id: $matchId) {
+              players {
+                playerSlot
+                stats {
+                  goldPerMinute
+                  experiencePerMinute
+                  lastHitsPerMinute
+                  deniesPerMinute
+                  heroDamagePerMinute
+                  heroDamageReceivedPerMinute
+                }
+              }
+            }
+          }
+        `,
+        { matchId },
+        "MatchPlayerTimelines"
+      );
+      if (timelineResult.payload.errors?.length) {
+        timelineDiagnostic = timelineResult.payload.errors[0]?.message ?? "STRATZ match timeline query failed.";
+      } else {
+        for (const player of timelineResult.payload.data?.match?.players ?? []) {
+          if (typeof player.playerSlot === "number") {
+            timelineBySlot.set(player.playerSlot, player.stats ?? null);
+          }
+        }
+      }
+    } catch (error) {
+      timelineDiagnostic = error instanceof Error ? error.message : "STRATZ match timeline query failed.";
+    }
+
+    const purchasesBySlot = new Map<number, Array<{ time: number; itemId: number | null }>>();
+    let purchaseDiagnostic: string | null = null;
+    try {
+      const purchaseResult = await this.execute<StratzMatchPurchaseTelemetryResponse>(
+        `
+          query MatchPlayerPurchases($matchId: Long!) {
+            match(id: $matchId) {
+              players {
+                playerSlot
+                stats {
+                  itemPurchases {
+                    time
+                    itemId
+                  }
+                }
+              }
+            }
+          }
+        `,
+        { matchId },
+        "MatchPlayerPurchases"
+      );
+      if (purchaseResult.payload.errors?.length) {
+        purchaseDiagnostic = purchaseResult.payload.errors[0]?.message ?? "STRATZ match purchases query failed.";
+      } else {
+        for (const player of purchaseResult.payload.data?.match?.players ?? []) {
+          if (typeof player.playerSlot === "number") {
+            purchasesBySlot.set(player.playerSlot, player.stats?.itemPurchases ?? []);
+          }
+        }
+      }
+    } catch (error) {
+      purchaseDiagnostic = error instanceof Error ? error.message : "STRATZ match purchases query failed.";
     }
 
     let wardEvents: NonNullable<NonNullable<StratzMatchWardTelemetryResponse["match"]>["playbackData"]>["wardEvents"] = [];
@@ -287,6 +365,8 @@ export class StratzAdapter {
     );
 
     const players = (match?.players ?? []).map<StratzMatchTelemetryPlayer>((player) => {
+      const timeline = typeof player.playerSlot === "number" ? timelineBySlot.get(player.playerSlot) : null;
+      const purchases = typeof player.playerSlot === "number" ? purchasesBySlot.get(player.playerSlot) ?? [] : [];
       const playerWardEvents = filteredWardEvents.filter((event) => event.fromPlayer === player.playerSlot);
       const observerLog = playerWardEvents
         .filter((event) => event.wardType === "OBSERVER")
@@ -317,13 +397,13 @@ export class StratzAdapter {
         playerSlot: player.playerSlot,
         playerId: player.steamAccountId,
         heroId: player.heroId,
-        goldTimeline: normalizeNumberArray(player.stats?.goldPerMinute),
-        xpTimeline: normalizeNumberArray(player.stats?.experiencePerMinute),
-        lastHitsTimeline: normalizeNumberArray(player.stats?.lastHitsPerMinute),
-        deniesTimeline: normalizeNumberArray(player.stats?.deniesPerMinute),
-        heroDamageTimeline: normalizeNumberArray(player.stats?.heroDamagePerMinute),
-        damageTakenTimeline: normalizeNumberArray(player.stats?.heroDamageReceivedPerMinute),
-        purchaseLog: (player.stats?.itemPurchases ?? [])
+        goldTimeline: normalizeNumberArray(timeline?.goldPerMinute),
+        xpTimeline: normalizeNumberArray(timeline?.experiencePerMinute),
+        lastHitsTimeline: normalizeNumberArray(timeline?.lastHitsPerMinute),
+        deniesTimeline: normalizeNumberArray(timeline?.deniesPerMinute),
+        heroDamageTimeline: normalizeNumberArray(timeline?.heroDamagePerMinute),
+        damageTakenTimeline: normalizeNumberArray(timeline?.heroDamageReceivedPerMinute),
+        purchaseLog: purchases
           .filter((entry) => typeof entry?.time === "number")
           .map((entry) => ({
             time: entry.time,
@@ -348,13 +428,18 @@ export class StratzAdapter {
         players,
         diagnostics: {
           discoveredSelections: [
-            "players.stats.goldPerMinute",
-            "players.stats.experiencePerMinute",
-            "players.stats.lastHitsPerMinute",
-            "players.stats.deniesPerMinute",
-            "players.stats.heroDamagePerMinute",
-            "players.stats.heroDamageReceivedPerMinute",
-            "players.stats.itemPurchases",
+            "players",
+            ...(timelineDiagnostic
+              ? [`players.stats timelines unavailable: ${timelineDiagnostic}`]
+              : [
+                  "players.stats.goldPerMinute",
+                  "players.stats.experiencePerMinute",
+                  "players.stats.lastHitsPerMinute",
+                  "players.stats.deniesPerMinute",
+                  "players.stats.heroDamagePerMinute",
+                  "players.stats.heroDamageReceivedPerMinute"
+                ]),
+            ...(purchaseDiagnostic ? [`players.stats.itemPurchases unavailable: ${purchaseDiagnostic}`] : ["players.stats.itemPurchases"]),
             ...(wardDiagnostic ? [`match.playbackData.wardEvents unavailable: ${wardDiagnostic}`] : ["match.playbackData.wardEvents"])
           ]
         }
