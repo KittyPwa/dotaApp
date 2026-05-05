@@ -14,7 +14,7 @@ export class UpstreamHttpError extends Error {
 export async function fetchJsonWithRetry<T>(
   input: RequestInfo | URL,
   init: RequestInit,
-  options: { retries?: number; provider: string }
+  options: { retries?: number; provider: string; operation?: string }
 ): Promise<T> {
   const retries = options.retries ?? 2;
   let attempt = 0;
@@ -40,6 +40,7 @@ export async function fetchJsonWithRetry<T>(
     if (!retryable || attempt === retries) {
       logger.error("Upstream request failed", {
         provider: options.provider,
+        operation: options.operation ?? null,
         statusCode: response.status,
         body
       });
@@ -53,6 +54,7 @@ export async function fetchJsonWithRetry<T>(
 
     logger.warn("Retrying upstream request", {
       provider: options.provider,
+      operation: options.operation ?? null,
       statusCode: response.status,
       attempt
     });

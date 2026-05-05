@@ -126,7 +126,8 @@ export class StratzAdapter {
 
   async execute<T>(
     query: string,
-    variables: Record<string, unknown>
+    variables: Record<string, unknown>,
+    operation: string
   ): Promise<ProviderFetchResult<GraphQLResponse<T>>> {
     this.assertConfigured();
     const settings = await this.settingsService.getSettings({ includeProtected: true });
@@ -147,9 +148,9 @@ export class StratzAdapter {
           Authorization: `Bearer ${this.apiKey}`,
           "User-Agent": "STRATZ_API"
         },
-        body: JSON.stringify({ query, variables })
+        body: JSON.stringify({ query, variables, operationName: operation })
       },
-      { provider: "stratz" }
+      { provider: "stratz", operation }
     );
     return { payload, fetchedAt };
   }
@@ -163,7 +164,8 @@ export class StratzAdapter {
           }
         }
       `,
-      { playerId }
+      { playerId },
+      "PlayerBasic"
     );
   }
 
@@ -185,7 +187,8 @@ export class StratzAdapter {
           }
         }
       `,
-      { leagueId, take: Math.min(100, Math.max(1, limit)) }
+      { leagueId, take: Math.min(100, Math.max(1, limit)) },
+      "LeagueMatches"
     );
 
     if (result.payload.errors?.length) {
@@ -234,7 +237,8 @@ export class StratzAdapter {
           }
         }
       `,
-      { matchId }
+      { matchId },
+      "MatchTelemetry"
     );
 
     if (result.payload.errors?.length) {
@@ -261,7 +265,8 @@ export class StratzAdapter {
             }
           }
         `,
-        { matchId }
+        { matchId },
+        "MatchWardTelemetry"
       );
       if (wardResult.payload.errors?.length) {
         wardDiagnostic = wardResult.payload.errors[0]?.message ?? "STRATZ ward telemetry query failed.";
