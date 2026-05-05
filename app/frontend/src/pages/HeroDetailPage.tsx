@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
@@ -162,6 +162,70 @@ function HeroItemBuildBranch({ node }: { node: ItemBuildTreeNode }) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+type HeroItemMatchup = NonNullable<ReturnType<typeof useHero>["data"]>["itemsAgainst"]["highSuccess"][number];
+type HeroVsHeroMatchup = NonNullable<ReturnType<typeof useHero>["data"]>["heroesAgainst"]["highSuccess"][number];
+
+function HeroItemMatchupList({ items, emptyLabel }: { items: HeroItemMatchup[]; emptyLabel: string }) {
+  if (items.length === 0) {
+    return <EmptyState label={emptyLabel} />;
+  }
+
+  return (
+    <div className="item-matchup-list">
+      {items.slice(0, 10).map((item) => (
+        <a
+          key={`${item.itemName}-${item.games}-${item.winrate}`}
+          className={`item-matchup-chip ${item.isHeroMajority ? "hero-majority" : ""}`}
+          href={item.imageUrl ?? undefined}
+          target="_blank"
+          rel="noreferrer"
+          title={`${item.itemName} - ${formatNumber(item.games)} games - ${item.winrate}% winrate with this hero${item.isHeroMajority ? " - mostly carried by this hero's own inventory" : ""}`}
+        >
+          <IconImage src={item.imageUrl} alt={item.itemName} size="sm" />
+          <span>{formatNumber(item.games)}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function HeroVsHeroMatchupList({ heroes, emptyLabel }: { heroes: HeroVsHeroMatchup[]; emptyLabel: string }) {
+  if (heroes.length === 0) {
+    return <EmptyState label={emptyLabel} />;
+  }
+
+  return (
+    <div className="item-matchup-list">
+      {heroes.slice(0, 10).map((hero) => (
+        <Link
+          key={`${hero.heroId}-${hero.games}-${hero.winrate}`}
+          className="item-matchup-chip hero-matchup-chip"
+          to={`/heroes/${hero.heroId}`}
+          title={`${hero.heroName} - ${formatNumber(hero.games)} games - ${hero.winrate}% winrate with this hero`}
+        >
+          <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="sm" />
+          <span>{formatNumber(hero.games)}</span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function MatchupPair({
+  title,
+  children
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="stack compact matchup-pair">
+      <strong>{title}</strong>
+      {children}
     </div>
   );
 }
@@ -532,23 +596,87 @@ export function HeroDetailPage() {
             />
 
             <div className="two-column">
-              <Card title="Rank buckets in current scope">
-                <div className="stack compact">
-                  <div className="player-metrics">
-                    {query.data.mmrBreakdown.map((bucket) => (
-                      <div key={bucket.label}>
-                        <span className="eyebrow">{bucket.label}</span>
-                        <strong>{formatNumber(bucket.games)} games</strong>
-                        <span className="muted-inline">
-                          {formatNumber(bucket.wins)} wins | {bucket.winrate}% winrate
-                        </span>
-                      </div>
-                    ))}
+              <Card title="Heroes">
+                <p className="muted-inline">
+                  {formatNumber(query.data.matchupSamples.appearances)} scoped matches checked.
+                </p>
+                <MatchupPair title="With this hero">
+                  <div className="item-matchup-grid">
+                    <div className="stack compact">
+                      <strong>Above baseline</strong>
+                      <HeroVsHeroMatchupList
+                        heroes={query.data.heroesWith.highSuccess}
+                        emptyLabel="No available above-baseline hero pairings with this hero yet."
+                      />
+                    </div>
+                    <div className="stack compact">
+                      <strong>Below baseline</strong>
+                      <HeroVsHeroMatchupList
+                        heroes={query.data.heroesWith.lowSuccess}
+                        emptyLabel="No available below-baseline hero pairings with this hero yet."
+                      />
+                    </div>
                   </div>
-                  <p className="muted-inline">
-                    Rank filtering affects the full hero page. Unknown player ranks are excluded whenever a rank range is active.
-                  </p>
-                </div>
+                </MatchupPair>
+                <MatchupPair title="Against this hero">
+                  <div className="item-matchup-grid">
+                    <div className="stack compact">
+                      <strong>Opponents above baseline</strong>
+                      <HeroVsHeroMatchupList
+                        heroes={query.data.heroesAgainst.highSuccess}
+                        emptyLabel="No available opponent heroes above baseline in available roster data yet."
+                      />
+                    </div>
+                    <div className="stack compact">
+                      <strong>Opponents below baseline</strong>
+                      <HeroVsHeroMatchupList
+                        heroes={query.data.heroesAgainst.lowSuccess}
+                        emptyLabel="No available opponent heroes below baseline in available roster data yet."
+                      />
+                    </div>
+                  </div>
+                </MatchupPair>
+              </Card>
+              <Card title="Items">
+                <p className="muted-inline">
+                  {formatNumber(query.data.matchupSamples.appearances)} scoped matches checked. Final inventory only, 1500+ gold.
+                </p>
+                <MatchupPair title="With this hero">
+                  <div className="item-matchup-grid">
+                    <div className="stack compact">
+                      <strong>High success</strong>
+                      <HeroItemMatchupList
+                        items={query.data.itemsWith.highSuccess}
+                        emptyLabel="No available above-baseline item patterns with this hero yet."
+                      />
+                    </div>
+                    <div className="stack compact">
+                      <strong>Low success</strong>
+                      <HeroItemMatchupList
+                        items={query.data.itemsWith.lowSuccess}
+                        emptyLabel="No available below-baseline item patterns with this hero yet."
+                      />
+                    </div>
+                  </div>
+                </MatchupPair>
+                <MatchupPair title="Against this hero">
+                  <div className="item-matchup-grid">
+                    <div className="stack compact">
+                      <strong>High success</strong>
+                      <HeroItemMatchupList
+                        items={query.data.itemsAgainst.highSuccess}
+                        emptyLabel="No available above-baseline item patterns against this hero yet."
+                      />
+                    </div>
+                    <div className="stack compact">
+                      <strong>Low success</strong>
+                      <HeroItemMatchupList
+                        items={query.data.itemsAgainst.lowSuccess}
+                        emptyLabel="No available below-baseline item patterns against this hero yet."
+                      />
+                    </div>
+                  </div>
+                </MatchupPair>
               </Card>
             </div>
           </div>

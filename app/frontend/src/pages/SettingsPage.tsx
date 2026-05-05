@@ -3,12 +3,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   apiPost,
   clearStoredAdminPassword,
+  getLocalLanguageOverride,
   getSessionColorblindModeOverride,
   getSessionDarkModeOverride,
   getSessionPatchScopeOverride,
   getLocalAutoRefreshPlayerIdsOverride,
   getLocalPrimaryPlayerIdOverride,
   LOCAL_PLAYER_PREFERENCES_EVENT,
+  setLocalLanguageOverride,
   setLocalAutoRefreshPlayerIdsOverride,
   setLocalPrimaryPlayerIdOverride,
   setSessionColorblindModeOverride,
@@ -30,6 +32,7 @@ import {
   type ProviderEnrichmentProcessResponse,
   type ProviderEnrichmentEnqueueResponse
 } from "../hooks/useQueries";
+import { useTranslation } from "../lib/i18n";
 
 type SettingsTab = "players" | "leagues" | "data" | "providers" | "accessibility" | "diagnostics" | "community";
 
@@ -66,6 +69,7 @@ function parseSavedLeagueLine(value: string) {
 }
 
 export function SettingsPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const query = useSettings();
   const save = useSaveSettings();
@@ -80,6 +84,7 @@ export function SettingsPage() {
   const [recentPatchCount, setRecentPatchCount] = useState("2");
   const [colorblindMode, setColorblindMode] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [language, setLanguage] = useState(() => getLocalLanguageOverride());
   const [stratzPerSecondCap, setStratzPerSecondCap] = useState("20");
   const [stratzPerMinuteCap, setStratzPerMinuteCap] = useState("250");
   const [stratzPerHourCap, setStratzPerHourCap] = useState("2000");
@@ -139,6 +144,7 @@ export function SettingsPage() {
       setRecentPatchCount(String(sessionPatchOverride.recentPatchCount ?? query.data.recentPatchCount));
       setColorblindMode(sessionColorblindOverride ?? query.data.colorblindMode);
       setDarkMode(sessionDarkModeOverride ?? query.data.darkMode);
+      setLanguage(getLocalLanguageOverride());
       setStratzPerSecondCap(String(query.data.stratzPerSecondCap));
       setStratzPerMinuteCap(String(query.data.stratzPerMinuteCap));
       setStratzPerHourCap(String(query.data.stratzPerHourCap));
@@ -176,13 +182,17 @@ export function SettingsPage() {
   const canSubmitCurrentTab = canManagePersistentSettings || sessionOnlyTab || browserPlayerTab;
 
   const tabs: Array<{ id: SettingsTab; label: string }> = [
-    { id: "players", label: "Players" },
-    { id: "leagues", label: "Leagues" },
-    { id: "data", label: "Data scope" },
-    { id: "accessibility", label: "Accessibility" }
+    { id: "players", label: t("settings.tabs.players") },
+    { id: "leagues", label: t("settings.tabs.leagues") },
+    { id: "data", label: t("settings.tabs.data") },
+    { id: "accessibility", label: t("settings.tabs.accessibility") }
   ];
   if (!adminProtectionEnabled || adminUnlocked) {
-    tabs.push({ id: "providers", label: "Providers" }, { id: "diagnostics", label: "Diagnostics" }, { id: "community", label: "Community" });
+    tabs.push(
+      { id: "providers", label: t("settings.tabs.providers") },
+      { id: "diagnostics", label: t("settings.tabs.diagnostics") },
+      { id: "community", label: t("settings.tabs.community") }
+    );
   }
 
   useEffect(() => {
@@ -192,11 +202,11 @@ export function SettingsPage() {
   }, [activeTab, tabs]);
 
   return (
-    <Page title="Settings">
-      {query.isLoading ? <LoadingState label="Loading settings..." /> : null}
+    <Page title={t("settings.title")}>
+      {query.isLoading ? <LoadingState label={t("settings.loading")} /> : null}
       {query.error ? <ErrorState error={query.error as Error} /> : null}
       {!adminProtectionEnabled ? (
-        <Card title="Admin password">
+        <Card title={t("settings.adminPassword")}>
           <div className="stack">
             <p className="muted-inline">
               Set an admin password once. It will be stored locally as a salted hash in SQLite and will protect settings and admin actions.
@@ -248,7 +258,7 @@ export function SettingsPage() {
         </Card>
       ) : null}
       {adminProtectionEnabled ? (
-        <Card title="Admin access">
+        <Card title={t("settings.adminAccess")}>
           <div className="stack">
             {adminUnlocked ? (
               <>
@@ -302,7 +312,7 @@ export function SettingsPage() {
           </div>
         </Card>
       ) : null}
-      <Card title="Settings">
+      <Card title={t("settings.settings")}>
         <div className="settings-tabs">
           {tabs.map((tab) => (
             <button
@@ -346,6 +356,9 @@ export function SettingsPage() {
             );
             const parsedProviderWorkerScanLimit = Math.min(1000, Math.max(1, Number(providerWorkerScanLimit.trim()) || 200));
             const parsedProviderWorkerJobsPerRun = Math.min(25, Math.max(1, Number(providerWorkerJobsPerRun.trim()) || 5));
+            if (activeTab === "accessibility") {
+              setLocalLanguageOverride(language);
+            }
             if (activeTab === "players") {
               const nextPrimaryPlayerId =
                 Number.isInteger(parsedPrimaryPlayerId) && (parsedPrimaryPlayerId ?? 0) > 0 ? parsedPrimaryPlayerId : null;
@@ -953,6 +966,21 @@ export function SettingsPage() {
 
           {activeTab === "accessibility" ? (
             <div className="stack">
+              <label>
+                {t("settings.accessibility.language")}
+                <select
+                  value={language}
+                  onChange={(event) => {
+                    const nextLanguage = event.target.value === "en" ? "en" : "fr";
+                    setLanguage(nextLanguage);
+                    setLocalLanguageOverride(nextLanguage);
+                  }}
+                >
+                  <option value="fr">{t("settings.accessibility.french")}</option>
+                  <option value="en">{t("settings.accessibility.english")}</option>
+                </select>
+              </label>
+              <p className="muted-inline">{t("settings.accessibility.languageHelp")}</p>
               <label className="checkbox-row">
                 <input
                   type="checkbox"
@@ -960,7 +988,7 @@ export function SettingsPage() {
                   checked={colorblindMode}
                   onChange={(event) => setColorblindMode(event.target.checked)}
                 />
-                <span>Colorblind mode</span>
+                <span>{t("settings.accessibility.colorblind")}</span>
               </label>
               <label className="checkbox-row">
                 <input
@@ -969,14 +997,10 @@ export function SettingsPage() {
                   checked={darkMode}
                   onChange={(event) => setDarkMode(event.target.checked)}
                 />
-                <span>Dark mode</span>
+                <span>{t("settings.accessibility.dark")}</span>
               </label>
-              <p className="muted-inline">
-                Adjusts win/loss, team, and timeline colors to a palette that is easier to distinguish without red-green dependence.
-              </p>
-              <p className="muted-inline">
-                Switches the interface to a darker palette. In locked mode, this applies only to the current browser session.
-              </p>
+              <p className="muted-inline">{t("settings.accessibility.colorHelp")}</p>
+              <p className="muted-inline">{t("settings.accessibility.darkHelp")}</p>
             </div>
           ) : null}
 
@@ -1132,15 +1156,15 @@ export function SettingsPage() {
           <div className="action-group">
             <button type="submit" disabled={save.isPending || !canSubmitCurrentTab}>
               {save.isPending
-                ? "Saving..."
+                ? t("settings.save.saving")
                 : activeTab === "players"
-                  ? "Save for this browser"
+                  ? t("settings.save.browser")
                   : !canManagePersistentSettings && sessionOnlyTab
-                    ? "Apply for this session"
-                    : "Save settings"}
+                    ? t("settings.save.session")
+                    : t("settings.save.settings")}
             </button>
             {save.isError ? <p className="form-error">{(save.error as Error).message}</p> : null}
-            {save.isSuccess ? <p className="form-success">Settings saved locally.</p> : null}
+            {save.isSuccess ? <p className="form-success">{t("settings.save.success")}</p> : null}
           </div>
         </form>
       </Card>

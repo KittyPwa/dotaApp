@@ -169,13 +169,6 @@ export function StatsRadarChart({
           </button>
         ))}
       </div>
-      <p className="muted-inline">
-        {visiblePlayers.length === 0
-          ? "All players are hidden. Use the legend below to show them again."
-          : visiblePlayers.length === 1
-          ? "Single-player view uses fixed benchmark ranges so the shape remains readable."
-          : "Each axis is scaled against the best selected visible player for that stat, so the chart compares relative strengths within this group."}
-      </p>
     </div>
   );
 }

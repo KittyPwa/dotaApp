@@ -15,7 +15,7 @@ import type {
   SettingsPayload,
   TeamOverview
 } from "@dota/shared";
-import { apiDelete, apiGet, apiPost } from "../api/client";
+import { apiDelete, apiGet, apiPost, ensureLocalDraftOwnerKey } from "../api/client";
 
 export type ProviderEnrichmentSummary = {
   counts: Array<{ provider: "stratz" | "opendota_parse"; status: string; count: number }>;
@@ -135,7 +135,7 @@ export function useLeagueTeam(leagueId: number | null, teamId: number | null) {
   });
 }
 
-export function useDraftPlans(leagueId: number | null) {
+export function useDraftPlans(leagueId: number | null, enabled = true) {
   const query = new URLSearchParams();
   if (leagueId) query.set("leagueId", String(leagueId));
   const suffix = query.toString();
@@ -143,7 +143,7 @@ export function useDraftPlans(leagueId: number | null) {
   return useQuery({
     queryKey: ["draft-plans", leagueId],
     queryFn: () => apiGet<DraftPlanPayload[]>(`/api/draft-plans${suffix ? `?${suffix}` : ""}`),
-    enabled: leagueId !== null
+    enabled
   });
 }
 
@@ -166,9 +166,13 @@ export function useSaveDraftPlan() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (draft: DraftPlanPayload) => apiPost<DraftPlanPayload>("/api/draft-plans", draft),
+    mutationFn: async (draft: DraftPlanPayload) => {
+      await ensureLocalDraftOwnerKey();
+      return apiPost<DraftPlanPayload>("/api/draft-plans", draft);
+    },
     onSuccess: async (draft) => {
       await queryClient.invalidateQueries({ queryKey: ["draft-plans", draft.leagueId] });
+      await queryClient.invalidateQueries({ queryKey: ["draft-plans", null] });
     }
   });
 }
@@ -181,6 +185,7 @@ export function useDeleteDraftPlan() {
       apiDelete<{ ok: boolean }>(`/api/draft-plans/${encodeURIComponent(draftId)}`).then((result) => ({ ...result, leagueId })),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["draft-plans", result.leagueId] });
+      await queryClient.invalidateQueries({ queryKey: ["draft-plans", null] });
     }
   });
 }

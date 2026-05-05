@@ -6,12 +6,15 @@ const SESSION_COLORBLIND_KEY = "dota-session-colorblind-mode";
 const SESSION_DARK_MODE_KEY = "dota-session-dark-mode";
 const SESSION_LIMIT_PATCHES_KEY = "dota-session-limit-patches";
 const SESSION_PATCH_COUNT_KEY = "dota-session-patch-count";
+const LOCAL_LANGUAGE_KEY = "dota-local-language";
 const LOCAL_PRIMARY_PLAYER_ID_KEY = "dota-local-primary-player-id";
 const LOCAL_FAVORITE_PLAYER_IDS_KEY = "dota-local-favorite-player-ids";
 const LOCAL_AUTO_REFRESH_PLAYER_IDS_KEY = "dota-local-auto-refresh-player-ids";
 const LOCAL_DRAFT_OWNER_KEY = "dota-local-draft-owner-key";
 export const SESSION_PREFERENCES_EVENT = "dota-session-preferences-changed";
 export const LOCAL_PLAYER_PREFERENCES_EVENT = "dota-local-player-preferences-changed";
+export const LOCAL_LANGUAGE_EVENT = "dota-local-language-changed";
+export type AppLanguage = "fr" | "en";
 
 function notifySessionPreferencesChanged() {
   if (typeof window === "undefined") return;
@@ -21,6 +24,11 @@ function notifySessionPreferencesChanged() {
 function notifyLocalPlayerPreferencesChanged() {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new Event(LOCAL_PLAYER_PREFERENCES_EVENT));
+}
+
+function notifyLocalLanguageChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(LOCAL_LANGUAGE_EVENT));
 }
 
 export function getStoredAdminPassword() {
@@ -38,6 +46,18 @@ export function clearStoredAdminPassword() {
   window.sessionStorage.removeItem(ADMIN_PASSWORD_STORAGE_KEY);
 }
 
+export function getLocalLanguageOverride(): AppLanguage {
+  if (typeof window === "undefined") return "fr";
+  const value = window.localStorage.getItem(LOCAL_LANGUAGE_KEY);
+  return value === "en" ? "en" : "fr";
+}
+
+export function setLocalLanguageOverride(value: AppLanguage) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_LANGUAGE_KEY, value);
+  notifyLocalLanguageChanged();
+}
+
 function parseStoredPlayerIds(value: string | null) {
   if (!value) return [];
   return value
@@ -46,20 +66,39 @@ function parseStoredPlayerIds(value: string | null) {
     .filter((entry, index, list) => Number.isInteger(entry) && entry > 0 && list.indexOf(entry) === index);
 }
 
-function createBrowserKey() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID().replace(/-/g, "");
-  }
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
+export function normalizeDraftOwnerCode(value: string) {
+  return value.replace(/[^\x21-\x7e]/g, "").slice(0, 128);
+}
+
+export function setLocalDraftOwnerCode(value: string) {
+  if (typeof window === "undefined") return null;
+  const normalized = normalizeDraftOwnerCode(value);
+  if (normalized.length < 10) return null;
+  window.localStorage.setItem(LOCAL_DRAFT_OWNER_KEY, normalized);
+  return normalized;
 }
 
 export function getLocalDraftOwnerKey() {
   if (typeof window === "undefined") return null;
-  const existing = window.localStorage.getItem(LOCAL_DRAFT_OWNER_KEY);
-  if (existing) return existing;
-  const next = createBrowserKey();
-  window.localStorage.setItem(LOCAL_DRAFT_OWNER_KEY, next);
-  return next;
+  return window.localStorage.getItem(LOCAL_DRAFT_OWNER_KEY);
+}
+
+export async function ensureLocalDraftOwnerKey() {
+  const existing = getLocalDraftOwnerKey();
+  if (existing) return { ownerKey: existing, created: false };
+  const response = await fetch(`${apiBase}/api/draft-owner-code`, {
+    method: "POST",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({})
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(payload?.message ?? `Request failed with ${response.status}`);
+  }
+  const payload = (await response.json()) as { ownerKey: string };
+  const ownerKey = setLocalDraftOwnerCode(payload.ownerKey);
+  if (!ownerKey) throw new Error("Draft access code from server was invalid.");
+  return { ownerKey, created: true };
 }
 
 export function getLocalPrimaryPlayerIdOverride() {

@@ -113,10 +113,7 @@ export function PlayerComparePage() {
   };
 
   return (
-    <Page
-      title="Compare players"
-      subtitle="Cross-reference local match history, shared games, teammate winrates, and hero overlap between multiple players."
-    >
+    <Page title="Compare players">
       <Card title="Comparison setup">
         <form
           className="stack"
@@ -137,7 +134,6 @@ export function PlayerComparePage() {
         </form>
         {favoritePlayers.length > 0 ? (
           <div className="stack compact">
-            <span className="eyebrow">Quick pick from your player + favorites</span>
             <div className="action-group">
               {favoritePlayers.map((player) => {
                 const active = playerIds.includes(player.playerId);
@@ -155,9 +151,6 @@ export function PlayerComparePage() {
             </div>
           </div>
         ) : null}
-        <p className="muted-inline">
-          Comparison metrics use your local dataset only. Shared/combo counts mean matches where the selected players were on the same team with those exact hero assignments.
-        </p>
       </Card>
 
       {playerIds.length < 2 ? <EmptyState label="Enter at least two player IDs to compare them." /> : null}
@@ -311,11 +304,6 @@ export function PlayerComparePage() {
                 <EmptyState label="No hero-combination data found in shared matches yet." />
               ) : (
                 <div className="stack compact">
-                  {playerIds.length === 2 && playerIds.includes(148440404) && playerIds.includes(168634634) ? (
-                    <p className="muted-inline">
-                      Live check: `Kittypwa: Invoker + Nerros: Brewmaster` is currently `21` exact shared matches in your local dataset.
-                    </p>
-                  ) : null}
                   {pagedComboRows.map((combo) => (
                     <button
                       key={combo.comboKey}
@@ -396,11 +384,6 @@ export function PlayerComparePage() {
               ) : (
                 <EmptyState label="Click a hero combination above to inspect the exact matches behind that stat." />
               )
-            }
-            extra={
-              selectedCombo ? (
-                <span className="muted-inline">Showing all locally stored shared matches for this exact player-to-hero combination.</span>
-              ) : null
             }
           >
             <DataTable

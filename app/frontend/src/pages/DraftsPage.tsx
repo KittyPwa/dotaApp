@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { IconImage } from "../components/IconImage";
@@ -22,6 +23,7 @@ import {
   type DraftSlot
 } from "../lib/draftStorage";
 import { formatNumber } from "../lib/format";
+import { ensureLocalDraftOwnerKey, getLocalDraftOwnerKey, normalizeDraftOwnerCode, setLocalDraftOwnerCode } from "../api/client";
 
 type HeroOption = {
   heroId: number;
@@ -49,11 +51,38 @@ type DraftCombo = {
   heroes: HeroOption[];
 };
 type HeroDraftState = "ban" | "pick";
+type DraftLibraryGroup = {
+  key: string;
+  title: string;
+  drafts: Array<{ draft: DraftPlan; matchup: string }>;
+};
 
 function getTeamName(teams: Array<{ teamId: number; name: string; tag: string | null }>, teamId: number | null) {
   if (!teamId) return null;
   const team = teams.find((entry) => entry.teamId === teamId);
   return team ? `${team.name}${team.tag ? ` (${team.tag})` : ""}` : `Team ${teamId}`;
+}
+
+function groupDraftsByTeam(drafts: DraftPlan[], teams: Array<{ teamId: number; name: string; tag: string | null }>) {
+  const groups = new Map<string, DraftLibraryGroup>();
+  const ensureGroup = (key: string, title: string) => {
+    const existing = groups.get(key);
+    if (existing) return existing;
+    const group = { key, title, drafts: [] };
+    groups.set(key, group);
+    return group;
+  };
+
+  for (const draft of drafts) {
+    const ownerTeamId = draft.firstTeamId ?? draft.secondTeamId;
+    const ownerName = getTeamName(teams, ownerTeamId) ?? "Unassigned";
+    const opponentTeamId = ownerTeamId === draft.firstTeamId ? draft.secondTeamId : draft.firstTeamId;
+    const opponentName = getTeamName(teams, opponentTeamId);
+    const matchup = opponentName ? `vs ${opponentName}` : "No opponent assigned";
+    ensureGroup(ownerTeamId ? `team-${ownerTeamId}` : "unassigned", ownerName).drafts.push({ draft, matchup });
+  }
+
+  return [...groups.values()].sort((left, right) => left.title.localeCompare(right.title));
 }
 
 function DraftHeroChip({
@@ -473,7 +502,63 @@ function DraftTeamContextPanel({
   );
 }
 
+function DraftLeagueLibrarySection({
+  leagueId,
+  leagueName,
+  drafts,
+  onOpenDraft,
+  onDeleteDraft
+}: {
+  leagueId: number;
+  leagueName: string;
+  drafts: DraftPlan[];
+  onOpenDraft: (draft: DraftPlan) => void;
+  onDeleteDraft: (draft: DraftPlan) => void;
+}) {
+  const league = useLeague(leagueId);
+  const groups = useMemo(
+    () => groupDraftsByTeam([...drafts].sort((left, right) => right.updatedAt - left.updatedAt), league.data?.teams ?? []),
+    [drafts, league.data?.teams]
+  );
+
+  return (
+    <section className="draft-league-library-section">
+      <div className="draft-league-library-header">
+        <h3>{league.data?.name ?? leagueName}</h3>
+        <span>{formatNumber(drafts.length)} drafts</span>
+      </div>
+      {groups.length ? (
+        <div className="draft-library">
+          {groups.map((group) => (
+            <section key={`${leagueId}-${group.key}`} className="draft-library-group">
+              <div className="draft-library-group-header">
+                <h4>{group.title}</h4>
+              </div>
+              <div className="draft-library-links">
+                {group.drafts.map(({ draft, matchup }) => (
+                  <div key={`${group.key}-${draft.id}`} className="draft-library-link">
+                    <button type="button" onClick={() => onOpenDraft(draft)}>
+                      <strong>{draft.name}</strong>
+                      <span>{matchup}</span>
+                    </button>
+                    <button type="button" className="ghost-button compact" onClick={() => onDeleteDraft(draft)}>
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <EmptyState label="No saved drafts for this league yet." />
+      )}
+    </section>
+  );
+}
+
 export function DraftsPage() {
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const settings = useSettings();
   const initialLeagueId = Number(searchParams.get("leagueId"));
@@ -483,11 +568,15 @@ export function DraftsPage() {
   const [drafts, setDrafts] = useState<DraftPlan[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(searchParams.get("draftId"));
   const [heroSearch, setHeroSearch] = useState("");
+  const [draftOwnerKey, setDraftOwnerKey] = useState<string | null>(() => getLocalDraftOwnerKey());
+  const [accessCodeInput, setAccessCodeInput] = useState(() => getLocalDraftOwnerKey() ?? "");
+  const [accessCodeMessage, setAccessCodeMessage] = useState<string | null>(null);
+  const [newAccessCode, setNewAccessCode] = useState<string | null>(null);
   const [targetSlotId, setTargetSlotId] = useState<string | null>(null);
   const [pickerSlotId, setPickerSlotId] = useState<string | null>(null);
 
   const league = useLeague(leagueId);
-  const draftPlans = useDraftPlans(leagueId);
+  const draftPlans = useDraftPlans(leagueId, draftOwnerKey !== null);
   const saveDraft = useSaveDraftPlan();
   const deleteDraft = useDeleteDraftPlan();
   const heroStats = useHeroStats({ leagueId });
@@ -515,12 +604,6 @@ export function DraftsPage() {
   const draftContext = useDraftContext(firstTeamPlayerIds, secondTeamPlayerIds);
 
   useEffect(() => {
-    if (!leagueId && settings.data?.savedLeagues?.[0]) {
-      setLeagueId(settings.data.savedLeagues[0].leagueId);
-    }
-  }, [leagueId, settings.data?.savedLeagues]);
-
-  useEffect(() => {
     if (draftPlans.data) {
       setDrafts(draftPlans.data.map(normalizeDraftPlanOrder));
     }
@@ -535,46 +618,38 @@ export function DraftsPage() {
     setSearchParams(next, { replace: true });
   }, [leagueId, selectedDraftId]);
 
-  const leagueDrafts = useMemo(
-    () => drafts.filter((draft) => draft.leagueId === leagueId).sort((a, b) => b.updatedAt - a.updatedAt),
+  const visibleDrafts = useMemo(
+    () =>
+      (leagueId ? drafts.filter((draft) => draft.leagueId === leagueId) : [...drafts]).sort(
+        (left, right) => right.updatedAt - left.updatedAt
+      ),
     [drafts, leagueId]
   );
 
   useEffect(() => {
-    if (selectedDraftId && !leagueDrafts.some((draft) => draft.id === selectedDraftId)) {
+    if (selectedDraftId && !visibleDrafts.some((draft) => draft.id === selectedDraftId)) {
       setSelectedDraftId(null);
     }
-  }, [leagueDrafts, selectedDraftId]);
+  }, [visibleDrafts, selectedDraftId]);
 
   const teams = league.data?.teams ?? [];
-  const draftGroups = useMemo(() => {
-    const groups = new Map<
-      string,
-      {
-        key: string;
-        title: string;
-        drafts: Array<{ draft: DraftPlan; matchup: string }>;
-      }
-    >();
-    const ensureGroup = (key: string, title: string) => {
-      const existing = groups.get(key);
-      if (existing) return existing;
-      const group = { key, title, drafts: [] };
-      groups.set(key, group);
-      return group;
-    };
-
-    for (const draft of leagueDrafts) {
-      const ownerTeamId = draft.firstTeamId ?? draft.secondTeamId;
-      const ownerName = getTeamName(teams, ownerTeamId) ?? "Unassigned";
-      const opponentTeamId = ownerTeamId === draft.firstTeamId ? draft.secondTeamId : draft.firstTeamId;
-      const opponentName = getTeamName(teams, opponentTeamId);
-      const matchup = opponentName ? `vs ${opponentName}` : "No opponent assigned";
-      ensureGroup(ownerTeamId ? `team-${ownerTeamId}` : "unassigned", ownerName).drafts.push({ draft, matchup });
+  const draftGroups = useMemo(() => groupDraftsByTeam(visibleDrafts, teams), [visibleDrafts, teams]);
+  const leagueLibrarySections = useMemo(() => {
+    const byLeague = new Map<number, DraftPlan[]>();
+    for (const draft of drafts) {
+      const list = byLeague.get(draft.leagueId) ?? [];
+      list.push(draft);
+      byLeague.set(draft.leagueId, list);
     }
-
-    return [...groups.values()].sort((left, right) => left.title.localeCompare(right.title));
-  }, [leagueDrafts, teams]);
+    return [...byLeague.entries()]
+      .map(([sectionLeagueId, sectionDrafts]) => ({
+        leagueId: sectionLeagueId,
+        leagueName:
+          settings.data?.savedLeagues.find((entry) => entry.leagueId === sectionLeagueId)?.name ?? `League ${sectionLeagueId}`,
+        drafts: [...sectionDrafts].sort((left, right) => right.updatedAt - left.updatedAt)
+      }))
+      .sort((left, right) => left.leagueName.localeCompare(right.leagueName));
+  }, [drafts, settings.data?.savedLeagues]);
   const heroOptions = useMemo<HeroOption[]>(() => {
     const needle = heroSearch.trim().toLowerCase();
     return [...(heroStats.data ?? [])]
@@ -600,9 +675,16 @@ export function DraftsPage() {
     saveDraft.mutate(nextDraft);
   };
 
-  const createDraft = (options?: { firstTeamId?: number | null; secondTeamId?: number | null }) => {
-    if (!leagueId) return;
-    const draft = createEmptyDraft(leagueId, `Draft ${leagueDrafts.length + 1}`);
+  const createDraft = async (options?: { firstTeamId?: number | null; secondTeamId?: number | null }) => {
+    const draftLeagueId = leagueId ?? settings.data?.savedLeagues?.[0]?.leagueId ?? null;
+    if (!draftLeagueId) return;
+    const owner = await ensureLocalDraftOwnerKey();
+    setDraftOwnerKey(owner.ownerKey);
+    setAccessCodeInput(owner.ownerKey);
+    if (owner.created) {
+      setNewAccessCode(owner.ownerKey);
+    }
+    const draft = createEmptyDraft(draftLeagueId, `Draft ${visibleDrafts.length + 1}`);
     const firstTeamId = Number(searchParams.get("firstTeamId"));
     const secondTeamId = Number(searchParams.get("secondTeamId"));
     if (options && "firstTeamId" in options) draft.firstTeamId = options.firstTeamId ?? null;
@@ -611,24 +693,43 @@ export function DraftsPage() {
     else if (Number.isInteger(secondTeamId) && secondTeamId > 0) draft.secondTeamId = secondTeamId;
     const nextDrafts = [draft, ...drafts];
     setDrafts(nextDrafts);
+    setLeagueId(draftLeagueId);
     saveDraft.mutate(draft);
     setSelectedDraftId(draft.id);
   };
 
-  const removeDraft = () => {
-    if (!selectedDraft || !leagueId) return;
-    const nextDrafts = drafts.filter((draft) => draft.id !== selectedDraft.id);
-    setDrafts(nextDrafts);
-    setSelectedDraftId(nextDrafts.find((draft) => draft.leagueId === leagueId)?.id ?? null);
-    deleteDraft.mutate({ draftId: selectedDraft.id, leagueId });
+  const openDraft = (draft: DraftPlan) => {
+    setLeagueId(draft.leagueId);
+    setSelectedDraftId(draft.id);
   };
 
-  const removeDraftById = (draftId: string) => {
-    if (!leagueId) return;
-    const nextDrafts = drafts.filter((draft) => draft.id !== draftId);
+  const removeDraft = () => {
+    if (!selectedDraft) return;
+    const nextDrafts = drafts.filter((draft) => draft.id !== selectedDraft.id);
     setDrafts(nextDrafts);
-    if (selectedDraftId === draftId) setSelectedDraftId(null);
-    deleteDraft.mutate({ draftId, leagueId });
+    setSelectedDraftId(nextDrafts.find((draft) => draft.leagueId === selectedDraft.leagueId)?.id ?? null);
+    deleteDraft.mutate({ draftId: selectedDraft.id, leagueId: selectedDraft.leagueId });
+  };
+
+  const removeDraftById = (draft: DraftPlan) => {
+    const nextDrafts = drafts.filter((entry) => entry.id !== draft.id);
+    setDrafts(nextDrafts);
+    if (selectedDraftId === draft.id) setSelectedDraftId(null);
+    deleteDraft.mutate({ draftId: draft.id, leagueId: draft.leagueId });
+  };
+
+  const applyAccessCode = async () => {
+    const normalized = setLocalDraftOwnerCode(accessCodeInput);
+    if (!normalized) {
+      setAccessCodeMessage("Enter the draft access code exactly as it was given to you.");
+      return;
+    }
+    setAccessCodeInput(normalized);
+    setDraftOwnerKey(normalized);
+    setSelectedDraftId(null);
+    setDrafts([]);
+    await queryClient.invalidateQueries({ queryKey: ["draft-plans"] });
+    setAccessCodeMessage("Draft library refreshed for this access code.");
   };
 
   const updateSlot = (slotId: string, heroIds: number[]) => {
@@ -821,7 +922,7 @@ export function DraftsPage() {
                     setSelectedDraftId(null);
                   }}
                 >
-                  <option value="">Select league</option>
+                  <option value="">All leagues</option>
                   {settings.data?.savedLeagues.map((leagueEntry) => (
                     <option key={leagueEntry.leagueId} value={leagueEntry.leagueId}>
                       {leagueEntry.name}
@@ -830,32 +931,47 @@ export function DraftsPage() {
                 </select>
               </label>
               <label>
-                Draft
-                <select value={selectedDraftId ?? ""} onChange={(event) => setSelectedDraftId(event.target.value || null)}>
-                  <option value="">Select draft</option>
-                  {leagueDrafts.map((draft) => (
-                    <option key={draft.id} value={draft.id}>
-                      {draft.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
                 Hero search
                 <input value={heroSearch} onChange={(event) => setHeroSearch(event.target.value)} placeholder="Hero name" />
               </label>
+              <label>
+                Access code
+                <input
+                  value={accessCodeInput}
+                  onChange={(event) => setAccessCodeInput(normalizeDraftOwnerCode(event.target.value))}
+                  placeholder="Draft access code"
+                  maxLength={128}
+                />
+              </label>
+              <button type="button" className="ghost-button" onClick={applyAccessCode}>
+                Use code
+              </button>
             </div>
+            {accessCodeMessage ? <small className="draft-access-message">{accessCodeMessage}</small> : null}
           </section>
         ) : null}
 
         <section className="draft-main">
           {league.isLoading || heroStats.isLoading || draftPlans.isLoading ? <LoadingState label="Loading draft context..." /> : null}
+          {newAccessCode ? (
+            <div className="draft-access-modal-backdrop" role="presentation">
+              <div className="draft-access-modal" role="dialog" aria-modal="true" aria-labelledby="draft-access-title">
+                <h2 id="draft-access-title">Draft access code</h2>
+                <p>Keep this code somewhere safe. It is the only way to load these drafts from another browser or device.</p>
+                <code>{newAccessCode}</code>
+                <button type="button" onClick={() => setNewAccessCode(null)}>
+                  I saved it
+                </button>
+              </div>
+            </div>
+          ) : null}
           {selectedDraft ? (
             <>
               <div className="draft-editor-topbar">
                 <button type="button" className="ghost-button draft-back-button" onClick={() => setSelectedDraftId(null)}>
                   Back to drafts
                 </button>
+                {accessCodeMessage ? <small className="draft-access-message inline">{accessCodeMessage}</small> : null}
               </div>
 
               <HeroPickerModal
@@ -905,7 +1021,7 @@ export function DraftsPage() {
                   />
                 </div>
                 <div className="draft-sequence-board">
-                  {selectedDraft.slots.map((slot) => (
+                  {selectedDraft.slots.map((slot, index) => (
                     <div key={slot.id} className={`draft-sequence-row ${slot.kind}`}>
                       <div className="draft-sequence-cell first">
                         {slot.side === "first" ? (
@@ -925,6 +1041,9 @@ export function DraftsPage() {
                             />
                           </div>
                         ) : null}
+                      </div>
+                      <div className="draft-sequence-number" aria-label={`Draft row ${index + 1}`}>
+                        {index + 1}
                       </div>
                       <div className="draft-sequence-cell second">
                         {slot.side === "second" ? (
@@ -951,7 +1070,7 @@ export function DraftsPage() {
                 <div className="draft-side-shell second">
                   <div className="draft-editor-actions">
                     <div className="draft-editor-button-row">
-                      <button type="button" onClick={() => createDraft()} disabled={!leagueId}>
+                      <button type="button" onClick={() => void createDraft()} disabled={!leagueId}>
                         New draft
                       </button>
                       <button type="button" className="ghost-button" onClick={removeDraft}>
@@ -1028,13 +1147,13 @@ export function DraftsPage() {
             </>
           ) : (
             <Card title="Draft library">
+              <div className="draft-library-toolbar">
+                <button type="button" onClick={() => void createDraft()} disabled={!leagueId && !settings.data?.savedLeagues?.length}>
+                  New draft
+                </button>
+              </div>
               {leagueId ? (
                 <>
-                  <div className="draft-library-toolbar">
-                    <button type="button" onClick={() => createDraft()} disabled={!leagueId}>
-                      New draft
-                    </button>
-                  </div>
                   {draftGroups.length ? (
                     <div className="draft-library">
                       {draftGroups.map((group) => (
@@ -1045,11 +1164,11 @@ export function DraftsPage() {
                           <div className="draft-library-links">
                             {group.drafts.map(({ draft, matchup }) => (
                               <div key={`${group.key}-${draft.id}`} className="draft-library-link">
-                                <button type="button" onClick={() => setSelectedDraftId(draft.id)}>
+                                <button type="button" onClick={() => openDraft(draft)}>
                                   <strong>{draft.name}</strong>
                                   <span>{matchup}</span>
                                 </button>
-                                <button type="button" className="ghost-button compact" onClick={() => removeDraftById(draft.id)}>
+                                <button type="button" className="ghost-button compact" onClick={() => removeDraftById(draft)}>
                                   Delete
                                 </button>
                               </div>
@@ -1062,8 +1181,21 @@ export function DraftsPage() {
                     <EmptyState label="No saved drafts for this league yet." />
                   )}
                 </>
+              ) : leagueLibrarySections.length ? (
+                <div className="draft-league-library">
+                  {leagueLibrarySections.map((section) => (
+                    <DraftLeagueLibrarySection
+                      key={section.leagueId}
+                      leagueId={section.leagueId}
+                      leagueName={section.leagueName}
+                      drafts={section.drafts}
+                      onOpenDraft={openDraft}
+                      onDeleteDraft={removeDraftById}
+                    />
+                  ))}
+                </div>
               ) : (
-                <EmptyState label="Select a league in Scope to start drafting." />
+                <EmptyState label="No saved drafts for this access code yet. Select a league to create the first one." />
               )}
             </Card>
           )}

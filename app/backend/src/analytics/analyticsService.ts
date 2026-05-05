@@ -102,8 +102,7 @@ export class AnalyticsService {
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
       .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere))
       .groupBy(matchPlayers.heroId, heroes.localizedName)
-      .orderBy(desc(count(matchPlayers.id)))
-      .limit(5);
+      .orderBy(desc(count(matchPlayers.id)));
 
     const heroWinrateExpr = sql<number>`
       (sum(case when ${matchPlayers.win} = 1 then 1.0 else 0 end) / count(${matchPlayers.id})) * 100
@@ -121,9 +120,7 @@ export class AnalyticsService {
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
       .where(and(sql`${matchPlayers.heroId} is not null`, scopedWhere))
       .groupBy(matchPlayers.heroId, heroes.localizedName)
-      .having(sql`count(${matchPlayers.id}) >= 3`)
-      .orderBy(desc(heroWinrateExpr))
-      .limit(5);
+      .orderBy(desc(heroWinrateExpr));
 
     return {
       totalStoredMatches,

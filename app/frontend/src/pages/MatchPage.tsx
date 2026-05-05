@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { IconImage } from "../components/IconImage";
 import { MetricGrid } from "../components/MetricGrid";
 import { Page } from "../components/Page";
-import { ErrorState, LoadingState } from "../components/State";
+import { EmptyState, ErrorState, LoadingState } from "../components/State";
 import { useMatch, useRefreshMatch, useSettings } from "../hooks/useQueries";
 import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
@@ -19,7 +19,7 @@ function getKdaRatio(kills: number | null, deaths: number | null, assists: numbe
 }
 
 function formatTimelineMinute(minute: number) {
-  return `${minute}:00`;
+  return String(minute);
 }
 
 function cumulativeTimeline(values: number[]) {
@@ -315,43 +315,6 @@ function getLevelFromXp(totalXp: number | null) {
 function getTimelineValueAt(values: number[], minuteIndex: number) {
   if (values.length === 0) return null;
   return values[Math.min(values.length - 1, Math.max(0, minuteIndex))] ?? null;
-}
-
-function summarizeProviderStatus(status: {
-  configured: boolean;
-  attempted: boolean;
-  timelines: boolean;
-  itemTimings: boolean;
-  vision: boolean;
-  message: string | null;
-}) {
-  if (!status.configured) {
-    return "Not configured";
-  }
-
-  if (!status.attempted) {
-    return "Not needed";
-  }
-
-  if (status.timelines || status.itemTimings || status.vision) {
-    return "Enrichment active";
-  }
-
-  return "No extra telemetry added";
-}
-
-function shouldShowProviderDetails(status: {
-  configured: boolean;
-  attempted: boolean;
-  timelines: boolean;
-  itemTimings: boolean;
-  vision: boolean;
-  message: string | null;
-}) {
-  if (!status.message) return false;
-  if (!status.configured) return true;
-  if (status.attempted && !status.timelines && !status.itemTimings && !status.vision) return true;
-  return false;
 }
 
 function getCssVar(name: string, fallback: string) {
@@ -697,13 +660,11 @@ function TeamTimelineOverlayPanel({
   getValues,
   players,
   timelineMinutes,
-  selectedMode,
   selectedTabs
 }: {
   getValues: (tab: Exclude<TeamTimelineTab, "items">, mode: TimelineMode) => { radiant: number[]; dire: number[] };
   players: TimelinePlayer[];
   timelineMinutes: number[];
-  selectedMode: TimelineMode;
   selectedTabs: OverlaySelection[];
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -774,7 +735,7 @@ function TeamTimelineOverlayPanel({
               <span className="timeline-legend-swatch" style={{ backgroundColor: getTimelineMetricColor(selection.tab) }} />
               <TimelineMetricIcon type={selection.tab} />
               <strong>{tab?.label ?? selection.tab}</strong>
-              <span>{selection.mode === "perMinute" ? "minute" : "total"}</span>
+              <span>{selection.mode === "perMinute" ? "per minute" : "cumulative"}</span>
               <span>R {formatNumber(radiantValues[effectiveIndex] ?? radiantValues[radiantValues.length - 1] ?? 0)}</span>
               <span>D {formatNumber(direValues[effectiveIndex] ?? direValues[direValues.length - 1] ?? 0)}</span>
             </div>
@@ -788,7 +749,7 @@ function TeamTimelineOverlayPanel({
         ) : null}
       </div>
       <TimelinePlot
-        title={`Overlay - ${selectedMode === "perMinute" ? "per minute" : "cumulative"}`}
+        title={`Overlay - ${selectedTabs.map(formatTimelineSelectionLabel).join(" / ")}`}
         series={allSeries}
         eventMarkers={itemMarkers}
         timelineMinutes={timelineMinutes}
@@ -813,6 +774,18 @@ const timelineTabs: Array<{ key: Exclude<TimelineTab, "items">; label: string; s
   { key: "damageTaken", label: "Damage taken", shortLabel: "DT" },
   { key: "vision", label: "Vision", shortLabel: "V" }
 ];
+
+function formatTimelineModeLabel(label: string, mode: TimelineMode) {
+  return `${label} ${mode === "perMinute" ? "per minute" : "cumulative"}`;
+}
+
+function formatTimelineSelectionLabel(selection: OverlaySelection) {
+  if (selection.tab === "items") {
+    return `Items ${selection.mode === "perMinute" ? "core/completed" : "all purchases"}`;
+  }
+  const tab = timelineTabs.find((entry) => entry.key === selection.tab);
+  return formatTimelineModeLabel(tab?.label ?? selection.tab, selection.mode);
+}
 
 function getTimelineMetricColor(type: Exclude<TimelineTab, "items">) {
   const colors: Record<Exclude<TimelineTab, "items">, string> = {
@@ -897,6 +870,7 @@ function TimelineMetricIcon({ type }: { type: TimelineTab }) {
 
 type TimelinePlayer = {
   playerId: number | null;
+  personaname: string | null;
   heroId: number | null;
   heroName: string | null;
   heroIconUrl: string | null;
@@ -909,6 +883,7 @@ type TimelinePlayer = {
   damageTakenTimeline: number[];
   firstPurchaseTimes: Record<string, number>;
   itemUses: Record<string, number>;
+  smokeUseEvents: Array<{ time: number; source: string }>;
   purchaseLog: Array<{ time: number; key: string; charges: number | null }>;
   observerLog: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>;
   sentryLog: Array<{ time: number; x: number | null; y: number | null; z: number | null; action?: string | null }>;
@@ -1545,11 +1520,6 @@ function VisionMap({ players, durationSeconds }: { players: TimelinePlayer[]; du
             value={Math.min(selectedSecond, Math.ceil(maxSecond))}
             onChange={(event) => setSelectedSecond(Number(event.target.value))}
           />
-          <p className="muted-inline">
-            {hasReliableVisionState
-              ? "At 00:00 the map shows every recorded ward placement. After that, it shows wards that are still active at the selected time whenever despawn data is available."
-              : "This match only has ward placement telemetry. The map can show every recorded placement at 00:00, but active ward state later in the game is not reliable enough to display."}
-          </p>
         </div>
         {selectedSecond > 0 && !hasReliableVisionState ? (
           <div className="empty-state">
@@ -1707,7 +1677,7 @@ function MultiPlayerTimeline({
           <strong>{formatTimelineMinute(timelineMinutes[effectiveIndex] ?? effectiveIndex)}</strong>
         </div>
         <TimelinePlot
-          title={title ?? (selectedMode === "perMinute" ? "Per minute" : "Cumulative")}
+          title={title ?? formatTimelineModeLabel(timelineTabs.find((entry) => entry.key === selectedTab)?.label ?? selectedTab, selectedMode)}
           series={activeSeries}
           markerSeries={levelMarkerSeries}
           timelineMinutes={timelineMinutes}
@@ -1722,14 +1692,12 @@ function MultiPlayerTimeline({
 function MultiPlayerTimelineOverlay({
   players,
   timelineMinutes,
-  selectedMode,
   selectedTabs,
   hiddenKeys,
   onTogglePlayer
 }: {
   players: TimelinePlayer[];
   timelineMinutes: number[];
-  selectedMode: TimelineMode;
   selectedTabs: OverlaySelection[];
   hiddenKeys: string[];
   onTogglePlayer: (key: string) => void;
@@ -1838,7 +1806,7 @@ function MultiPlayerTimelineOverlay({
               <span className="timeline-legend-swatch" style={{ backgroundColor: getTimelineMetricColor(selection.tab) }} />
               <TimelineMetricIcon type={selection.tab} />
               <strong>{timelineTabs.find((entry) => entry.key === selection.tab)?.label ?? selection.tab}</strong>
-              <span>{selection.mode === "perMinute" ? "minute" : "total"}</span>
+              <span>{selection.mode === "perMinute" ? "per minute" : "cumulative"}</span>
             </div>
           ))}
           {itemSelections.length > 0 ? (
@@ -1849,7 +1817,7 @@ function MultiPlayerTimelineOverlay({
           ) : null}
         </div>
         <TimelinePlot
-          title={`Overlay - ${selectedMode === "perMinute" ? "per minute" : "cumulative"}`}
+          title={`Overlay - ${selectedTabs.map(formatTimelineSelectionLabel).join(" / ")}`}
           series={allPlotSeries}
           eventMarkers={itemMarkers}
           timelineMinutes={timelineMinutes}
@@ -1988,29 +1956,9 @@ export function MatchPage() {
       setPlayerOverlayTabs((current) => toggleOverlaySelection(current, tab, mode));
     }
   };
-  const hasAnyGoldTimeline = query.data?.participants.some((player) => player.goldTimeline.length > 0) ?? false;
-  const hasAnyXpTimeline = query.data?.participants.some((player) => player.xpTimeline.length > 0) ?? false;
-  const hasAnyLastHitsTimeline = query.data?.participants.some((player) => player.lastHitsTimeline.length > 0) ?? false;
-  const hasAnyHeroDamageTimeline =
-    query.data?.participants.some((player) => player.heroDamageTimeline.length > 0) ?? false;
-  const hasAnyDamageTakenTimeline =
-    query.data?.participants.some((player) => player.damageTakenTimeline.length > 0) ?? false;
-  const hasAnyItemTimings =
-    query.data?.participants.some((player) => Object.keys(player.firstPurchaseTimes).length > 0) ?? false;
-  const hasAnyPurchaseLog = query.data?.participants.some((player) => player.purchaseLog.length > 0) ?? false;
-  const hasAnyVisionData =
-    query.data?.participants.some(
-      (player) =>
-        player.observerLog.length > 0 ||
-        player.sentryLog.length > 0 ||
-        (player.observerWardsPlaced ?? 0) > 0 ||
-        (player.sentryWardsPlaced ?? 0) > 0
-    ) ?? false;
-
   return (
     <Page
       title={`Match ${params.matchId ?? ""}`}
-      subtitle="Detailed match inspection sourced from cache when possible and OpenDota when needed."
         aside={
           matchId && canManageMatchData ? (
             <button
@@ -2148,61 +2096,6 @@ export function MatchPage() {
           </Card>
           </div>
 
-          <Card title="Data availability">
-            <details className="card-details">
-              <summary>Show provider coverage and enrichment status</summary>
-              <div className="stack compact">
-                <div className="player-metrics">
-                  <div>
-                    <span className="eyebrow">Gold timeline</span>
-                    <strong>{hasAnyGoldTimeline ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">XP timeline</span>
-                    <strong>{hasAnyXpTimeline ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">Last-hit timeline</span>
-                    <strong>{hasAnyLastHitsTimeline ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">Hero damage timeline</span>
-                    <strong>{hasAnyHeroDamageTimeline ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">Damage taken timeline</span>
-                    <strong>{hasAnyDamageTakenTimeline ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">Item timings</span>
-                    <strong>{hasAnyItemTimings ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">Purchase log</span>
-                    <strong>{hasAnyPurchaseLog ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">Vision logs</span>
-                    <strong>{hasAnyVisionData ? "Available" : "Missing from provider"}</strong>
-                  </div>
-                </div>
-                <div className="stack compact">
-                  <p className="muted-inline">
-                    OpenDota: {summarizeProviderStatus(query.data.telemetryStatus.openDota)}
-                  </p>
-                  <p className="muted-inline">
-                    STRATZ: {summarizeProviderStatus(query.data.telemetryStatus.stratz)}
-                  </p>
-                </div>
-                {shouldShowProviderDetails(query.data.telemetryStatus.openDota) ? (
-                  <p className="muted-inline">OpenDota detail: {query.data.telemetryStatus.openDota.message}</p>
-                ) : null}
-                {shouldShowProviderDetails(query.data.telemetryStatus.stratz) ? (
-                  <p className="muted-inline">STRATZ detail: {query.data.telemetryStatus.stratz.message}</p>
-                ) : null}
-              </div>
-            </details>
-          </Card>
           </div>
 
           <div className={activeMatchTab === "vision" ? "tab-panel" : "tab-panel hidden"}>
@@ -2231,8 +2124,8 @@ export function MatchPage() {
                             ? "active"
                             : ""
                       }`}
-                      aria-label={`${tab.label} per minute`}
-                      title={`${tab.label} per minute`}
+                      aria-label={formatTimelineModeLabel(tab.label, "perMinute")}
+                      title={formatTimelineModeLabel(tab.label, "perMinute")}
                       onClick={() => selectTeamTimeline(tab.key, "perMinute")}
                     />
                     <button
@@ -2246,8 +2139,8 @@ export function MatchPage() {
                             ? "active"
                             : ""
                       }`}
-                      aria-label={`${tab.label} cumulative`}
-                      title={`${tab.label} cumulative`}
+                      aria-label={formatTimelineModeLabel(tab.label, "cumulative")}
+                      title={formatTimelineModeLabel(tab.label, "cumulative")}
                       onClick={() => selectTeamTimeline(tab.key, "cumulative")}
                     />
                   </div>
@@ -2310,7 +2203,6 @@ export function MatchPage() {
                   getValues={getTeamTimelineValues}
                   players={query.data.participants}
                   timelineMinutes={timelineMinutes}
-                  selectedMode={teamTimelineMode}
                   selectedTabs={teamOverlayTabs}
                 />
               ) : teamTimelineTab === "items" ? (
@@ -2332,7 +2224,7 @@ export function MatchPage() {
                           ? "Active observer wards"
                           : "Active observer wards unavailable"
                         : "Cumulative observer wards placed"
-                      : undefined
+                      : formatTimelineModeLabel(timelineTabs.find((entry) => entry.key === teamTimelineTab)?.label ?? teamTimelineTab, teamTimelineMode)
                   }
                 />
               )}
@@ -2358,8 +2250,8 @@ export function MatchPage() {
                             ? "active"
                             : ""
                       }`}
-                      aria-label={`${tab.label} per minute`}
-                      title={`${tab.label} per minute`}
+                      aria-label={formatTimelineModeLabel(tab.label, "perMinute")}
+                      title={formatTimelineModeLabel(tab.label, "perMinute")}
                       onClick={() => selectPlayerTimeline(tab.key, "perMinute")}
                     />
                     <button
@@ -2373,8 +2265,8 @@ export function MatchPage() {
                             ? "active"
                             : ""
                       }`}
-                      aria-label={`${tab.label} cumulative`}
-                      title={`${tab.label} cumulative`}
+                      aria-label={formatTimelineModeLabel(tab.label, "cumulative")}
+                      title={formatTimelineModeLabel(tab.label, "cumulative")}
                       onClick={() => selectPlayerTimeline(tab.key, "cumulative")}
                     />
                   </div>
@@ -2436,7 +2328,6 @@ export function MatchPage() {
                 <MultiPlayerTimelineOverlay
                   players={query.data.participants}
                   timelineMinutes={timelineMinutes}
-                  selectedMode={timelineMode}
                   selectedTabs={playerOverlayTabs}
                   hiddenKeys={hiddenTimelineKeys}
                   onTogglePlayer={(key) =>
@@ -2462,7 +2353,7 @@ export function MatchPage() {
                       ? timelineMode === "perMinute"
                         ? "Observer wards placed"
                         : "Cumulative observer wards placed"
-                      : undefined
+                      : formatTimelineModeLabel(timelineTabs.find((entry) => entry.key === timelineTab)?.label ?? timelineTab, timelineMode)
                   }
                 />
               )}
@@ -2484,9 +2375,6 @@ export function MatchPage() {
                   value={Math.min(rosterSecond, Math.ceil(rosterMaxSecond))}
                   onChange={(event) => setRosterSecond(Number(event.target.value))}
                 />
-                <p className="muted-inline">
-                  Timeline-backed roster stats update with the slider. Inventory, vision placements, and purchased utility now follow the selected time.
-                </p>
               </div>
             </Card>
           </div>
@@ -2520,7 +2408,6 @@ export function MatchPage() {
                     const rosterInventory = getRosterInventory(player, rosterSecond, rosterMaxSecond);
                     const observerPlacementsAtTime = getTimelineWardPlacementCount(player.observerLog, rosterSecond);
                     const sentryPlacementsAtTime = getTimelineWardPlacementCount(player.sentryLog, rosterSecond);
-                    const smokePurchasesAtTime = getTimelinePurchaseCount(player, "smoke", rosterSecond);
                     const wardEfficiencyAtTime = getWardEfficiencyPercent(player.observerLog, rosterSecond, 360);
                     const killParticipation =
                       section.teamKills > 0 ? (((player.kills ?? 0) + (player.assists ?? 0)) / section.teamKills) * 100 : 0;
@@ -2655,13 +2542,6 @@ export function MatchPage() {
                             <div>
                               <span className="eyebrow">Sentries</span>
                               <strong>{formatNumber(sentryPlacementsAtTime)}</strong>
-                            </div>
-                            <div>
-                              <span className="eyebrow">Smokes</span>
-                              <strong>
-                                {formatNumber(getSmokeUseCount(player))}
-                                <span className="muted-inline"> used / {formatNumber(smokePurchasesAtTime)} bought</span>
-                              </strong>
                             </div>
                             <div>
                               <span className="eyebrow">Ward efficiency</span>

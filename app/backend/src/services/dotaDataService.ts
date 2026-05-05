@@ -48,6 +48,40 @@ function parseJsonValue<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+const itemNameOverrides: Record<string, string> = {
+  smoke: "smoke_of_deceit",
+  blink_dagger: "blink",
+  battle_fury: "bfury",
+  aghanims_scepter: "aghanim_scepter",
+  aghanims_shard: "aghanim_shard",
+  eye_of_skadi: "skadi",
+  shadow_blade: "invis_sword"
+};
+
+function normalizeDotaItemName(value: string) {
+  const normalized = value
+    .replace(/^item_/i, "")
+    .trim()
+    .toLowerCase()
+    .replace(/['’]s/g, "s")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return itemNameOverrides[normalized] ?? normalized;
+}
+
+function getSmokeUseCountFromItemUses(itemUsesJson: string | null | undefined) {
+  const itemUses = parseJsonValue<Record<string, number>>(itemUsesJson, {});
+  return Object.entries(itemUses).reduce(
+    (sum, [key, value]) => (normalizeDotaItemName(key) === "smoke_of_deceit" ? sum + (Number.isFinite(value) ? value : 0) : sum),
+    0
+  );
+}
+
+function isWardRemovalAction(action?: string | null) {
+  const normalized = (action ?? "SPAWN").toUpperCase();
+  return normalized === "DESPAWN" || normalized === "DESTROY" || normalized === "DEATH" || normalized === "KILL";
+}
+
 type MatchParticipant = MatchOverview["participants"][number];
 
 type TelemetryProviderStatus = MatchOverview["telemetryStatus"]["openDota"];
@@ -712,6 +746,56 @@ export class DotaDataService {
     return costsById;
   }
 
+  private extractRawSmokeUseEvents(rawJson: string | null | undefined) {
+    const events = new Map<string, Array<{ time: number; source: string }>>();
+    const payload = parseJsonValue<unknown>(rawJson, null);
+    const addEvent = (keys: string[], time: number, source: string) => {
+      for (const key of keys.filter(Boolean)) {
+        const current = events.get(key) ?? [];
+        if (!current.some((event) => Math.abs(event.time - time) <= 1 && event.source === source)) {
+          current.push({ time, source });
+        }
+        events.set(key, current);
+      }
+    };
+    const walk = (value: unknown, path: string[]) => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) {
+        value.forEach((entry, index) => walk(entry, [...path, String(index)]));
+        return;
+      }
+      const record = value as Record<string, unknown>;
+      const flatText = Object.entries(record)
+        .filter(([, entry]) => typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean")
+        .map(([key, entry]) => `${key}:${entry}`)
+        .join("|")
+        .toLowerCase();
+      const hasSmoke = flatText.includes("smoke");
+      const looksUsed = /\b(use|used|uses|cast|consume|consumed)\b/.test(flatText);
+      const looksPurchased = /\b(purchase|purchased|buy|bought)\b/.test(flatText);
+      const timeValue = typeof record.time === "number" ? record.time : typeof record.gameTime === "number" ? record.gameTime : null;
+      if (hasSmoke && looksUsed && !looksPurchased && timeValue !== null && Number.isFinite(timeValue)) {
+        addEvent(
+          [
+            typeof record.player_slot === "number" ? `slot:${record.player_slot}` : "",
+            typeof record.playerSlot === "number" ? `slot:${record.playerSlot}` : "",
+            typeof record.account_id === "number" ? `player:${record.account_id}` : "",
+            typeof record.accountId === "number" ? `player:${record.accountId}` : "",
+            typeof record.hero_id === "number" ? `hero:${record.hero_id}` : "",
+            typeof record.heroId === "number" ? `hero:${record.heroId}` : ""
+          ],
+          timeValue,
+          `raw:${path.slice(-3).join(".") || "match"}`
+        );
+      }
+      for (const [key, entry] of Object.entries(record)) {
+        walk(entry, [...path, key]);
+      }
+    };
+    walk(payload, []);
+    return events;
+  }
+
   private mergeStratzTelemetryIntoParticipants(
     participants: MatchParticipant[],
     stratzPlayers: StratzMatchTelemetryPlayer[],
@@ -789,7 +873,7 @@ export class DotaDataService {
   private async tryStratzMatchEnrichment(
     matchId: number,
     participants: MatchParticipant[],
-    options?: { forceRefresh?: boolean }
+    options?: { forceRefresh?: boolean; cacheOnly?: boolean }
   ): Promise<{ participants: MatchParticipant[]; status: TelemetryProviderStatus }> {
     const settings = await this.settingsService.getSettings({ includeProtected: true });
     if (!settings.stratzApiKey) {
@@ -842,6 +926,20 @@ export class DotaDataService {
           itemTimings: mergedFlags.itemTimings && !baselineFlags.itemTimings,
           vision: mergedFlags.vision && !baselineFlags.vision,
           message: mergedFlags.timelines || mergedFlags.itemTimings || mergedFlags.vision ? "Cached STRATZ telemetry applied." : "Cached STRATZ telemetry did not include extra timeline or item telemetry."
+        }
+      };
+    }
+
+    if (options?.cacheOnly) {
+      return {
+        participants,
+        status: {
+          configured: true,
+          attempted: false,
+          timelines: false,
+          itemTimings: false,
+          vision: false,
+          message: "Cached STRATZ telemetry is unavailable."
         }
       };
     }
@@ -1754,8 +1852,7 @@ export class DotaDataService {
       .leftJoin(heroes, eq(heroes.id, matchPlayers.heroId))
       .leftJoin(leagues, eq(leagues.id, matches.leagueId))
       .where(scopedPlayerCondition)
-      .orderBy(desc(matches.startTime))
-      .limit(priorityPlayer ? 100 : 20);
+      .orderBy(desc(matches.startTime));
     const playerMatchParsedData = await this.getMatchParsedDataMap(
       playerMatches.map((match) => match.matchId).filter((matchId): matchId is number => matchId !== null)
     );
@@ -1869,6 +1966,42 @@ export class DotaDataService {
         ? Number(((observerActualLifetimeTotal / observerPotentialLifetimeTotal) * 100).toFixed(1))
         : null;
 
+    const visionHeatmapRows = await db
+      .select({
+        observerLogJson: matchPlayers.obsLogJson,
+        isRadiant: matchPlayers.isRadiant
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .where(scopedPlayerCondition);
+    const visionHeatmapMap = new Map<string, { x: number; y: number; count: number; isRadiant: boolean | null }>();
+    for (const row of visionHeatmapRows) {
+      const entries = parseJsonValue<
+        Array<{ time?: number; x?: number | null; y?: number | null; z?: number | null; action?: string | null }>
+      >(row.observerLogJson, []);
+      for (const entry of entries) {
+        const action = (entry.action ?? "SPAWN").toUpperCase();
+        if (action === "DESPAWN" || action === "DESTROY" || action === "DEATH" || action === "KILL") continue;
+        if (typeof entry.x !== "number" || typeof entry.y !== "number") continue;
+        const x = Math.round(entry.x / 4) * 4;
+        const y = Math.round(entry.y / 4) * 4;
+        const key = `${x}:${y}:${row.isRadiant === null ? "unknown" : row.isRadiant ? "radiant" : "dire"}`;
+        const current = visionHeatmapMap.get(key) ?? { x, y, count: 0, isRadiant: row.isRadiant };
+        current.count += 1;
+        visionHeatmapMap.set(key, current);
+      }
+    }
+    const visionHeatmap = [...visionHeatmapMap.values()].sort((left, right) => right.count - left.count).slice(0, 450);
+
+    const smokePlayerRows = await db
+      .select({
+        itemUsesJson: matchPlayers.itemUsesJson
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .where(scopedPlayerCondition);
+    const smokeUses = smokePlayerRows.reduce((sum, row) => sum + getSmokeUseCountFromItemUses(row.itemUsesJson), 0);
+
     const historySyncedAt = await this.getLatestRawPayloadFetchedAt("player_match_history", String(playerId));
     const filterBits = [matchScopeLabel];
     if (options?.leagueId) {
@@ -1918,8 +2051,17 @@ export class DotaDataService {
       },
       wins: winLossRow?.wins ?? 0,
       losses: winLossRow?.losses ?? 0,
-        comparisonStats: comparisonStatsMap.get(playerId) ?? [],
+      comparisonStats: comparisonStatsMap.get(playerId) ?? [],
       averageObserverWardLifetimePercent,
+      visionHeatmap,
+      smokeStats: {
+        uses: smokeUses,
+        inferredEvents: 0,
+        successes: 0,
+        failures: 0,
+        neutrals: 0,
+        efficiencyPercent: null
+      },
       heroUsage: heroUsageRows.map((row) => ({
         heroId: row.heroId ?? 0,
         heroName: row.heroName ?? `Hero ${row.heroId}`,
@@ -2269,7 +2411,7 @@ export class DotaDataService {
     };
   }
 
-  async getMatchOverview(matchId: number, options?: { forceRefresh?: boolean }): Promise<MatchOverview> {
+  async getMatchOverview(matchId: number, options?: { forceRefresh?: boolean; cacheOnly?: boolean }): Promise<MatchOverview> {
     await this.ensureReferenceData();
     const adapter = await this.createOpenDotaAdapter();
     const [matchRow] = await db.select().from(matches).where(eq(matches.id, matchId)).limit(1);
@@ -2333,7 +2475,7 @@ export class DotaDataService {
       .from(matchPlayers)
       .where(eq(matchPlayers.matchId, matchId));
     const [rawMatchPayload] = await db
-      .select({ id: rawApiPayloads.id })
+      .select({ id: rawApiPayloads.id, rawJson: rawApiPayloads.rawJson })
       .from(rawApiPayloads)
       .where(and(eq(rawApiPayloads.entityType, "match"), eq(rawApiPayloads.entityId, String(matchId))))
       .orderBy(desc(rawApiPayloads.fetchedAt))
@@ -2345,7 +2487,8 @@ export class DotaDataService {
     const hasFullRoster = participantCount >= 10;
     const hasDetailedStats = detailedParticipantCount >= 10;
     const hasRawMatchPayload = Boolean(rawMatchPayload);
-    const needsFullFetch = options?.forceRefresh || !matchRow || !hasFullRoster || !hasDetailedStats || !hasRawMatchPayload;
+    const needsFullFetch =
+      !options?.cacheOnly && (options?.forceRefresh || !matchRow || !hasFullRoster || !hasDetailedStats || !hasRawMatchPayload);
 
     let source: "cache" | "fresh" = "cache";
 
@@ -2438,6 +2581,13 @@ export class DotaDataService {
     const patchRow = freshMatch.patchId ? await db.select().from(patches).where(eq(patches.id, freshMatch.patchId)).limit(1) : [];
     const leagueRow = freshMatch.leagueId ? await db.select().from(leagues).where(eq(leagues.id, freshMatch.leagueId)).limit(1) : [];
     const draft = await this.analyticsService.getDraftOverview(matchId);
+    const [latestRawMatchPayload] = await db
+      .select({ rawJson: rawApiPayloads.rawJson })
+      .from(rawApiPayloads)
+      .where(and(eq(rawApiPayloads.entityType, "match"), eq(rawApiPayloads.entityId, String(matchId))))
+      .orderBy(desc(rawApiPayloads.fetchedAt))
+      .limit(1);
+    const rawSmokeEvents = this.extractRawSmokeUseEvents(latestRawMatchPayload?.rawJson ?? rawMatchPayload?.rawJson);
     const normalizedParticipants = participants.map((row) => ({
       playerId: row.playerId,
       personaname: row.personaname,
@@ -2466,6 +2616,11 @@ export class DotaDataService {
       damageTakenTimeline: [],
       firstPurchaseTimes: parseJsonValue<Record<string, number>>(row.firstPurchaseTimeJson, {}),
       itemUses: parseJsonValue<Record<string, number>>(row.itemUsesJson, {}),
+      smokeUseEvents: [
+        ...(row.playerSlot !== null ? rawSmokeEvents.get(`slot:${row.playerSlot}`) ?? [] : []),
+        ...(row.playerId !== null ? rawSmokeEvents.get(`player:${row.playerId}`) ?? [] : []),
+        ...(row.heroId !== null ? rawSmokeEvents.get(`hero:${row.heroId}`) ?? [] : [])
+      ].sort((left, right) => left.time - right.time),
       purchaseLog: parseJsonValue<Array<{ time?: number; key?: string; charges?: number }>>(row.purchaseLogJson, [])
         .filter((entry) => typeof entry.time === "number" && typeof entry.key === "string")
         .map((entry) => ({ time: entry.time as number, key: entry.key as string, charges: entry.charges ?? null })),
@@ -2526,7 +2681,8 @@ export class DotaDataService {
     }));
     const openDotaFlags = this.getTelemetryFlags(normalizedParticipants);
     const stratzEnrichment = await this.tryStratzMatchEnrichment(matchId, normalizedParticipants, {
-      forceRefresh: options?.forceRefresh
+      forceRefresh: options?.forceRefresh,
+      cacheOnly: options?.cacheOnly
     });
     const enrichedParticipants = stratzEnrichment.participants;
     const effectiveFlags = this.getTelemetryFlags(enrichedParticipants);
@@ -2727,6 +2883,7 @@ export class DotaDataService {
 
     const itemCatalogRows = await db
       .select({
+        itemId: items.id,
         itemInternalName: items.name,
         itemName: items.localizedName,
         itemImagePath: items.imagePath
@@ -2735,10 +2892,15 @@ export class DotaDataService {
     const itemCatalog = new Map(
       itemCatalogRows.map((item) => [
         item.itemInternalName,
-        { itemName: item.itemName, itemImagePath: item.itemImagePath }
+        { itemName: item.itemName, itemInternalName: item.itemInternalName, itemImagePath: item.itemImagePath }
       ])
     );
-
+    const itemCatalogById = new Map(
+      itemCatalogRows.map((item) => [
+        item.itemId,
+        { itemName: item.itemName, itemInternalName: item.itemInternalName, itemImagePath: item.itemImagePath }
+      ])
+    );
     const recentMatches = await db
       .select({
         matchId: matches.id,
@@ -2792,8 +2954,7 @@ export class DotaDataService {
       .leftJoin(players, eq(players.id, matchPlayers.playerId))
       .where(activeHeroScopeCondition)
       .groupBy(matchPlayers.playerId, players.personaname)
-      .orderBy(desc(sql`count(${matchPlayers.id})`))
-      .limit(20);
+      .orderBy(desc(sql`count(${matchPlayers.id})`));
 
     const skillRows = await db
       .select({
@@ -2942,6 +3103,273 @@ export class DotaDataService {
       itemBuildMap.set(key, current);
     }
 
+    const itemCostsById = await this.getItemCostMap();
+    const heroCatalogRows = await db
+      .select({
+        heroId: heroes.id,
+        heroInternalName: heroes.name,
+        heroName: heroes.localizedName,
+        heroIconPath: heroes.iconPath
+      })
+      .from(heroes);
+    const heroCatalogById = new Map(heroCatalogRows.map((hero) => [hero.heroId, hero]));
+
+    const targetHeroRows = await db
+      .select({
+        matchId: matchPlayers.matchId,
+        isRadiant: matchPlayers.isRadiant
+      })
+      .from(matchPlayers)
+      .leftJoin(matches, eq(matches.id, matchPlayers.matchId))
+      .leftJoin(players, eq(players.id, matchPlayers.playerId))
+      .where(activeHeroScopeCondition);
+    const targetSideByMatch = new Map<number, boolean>();
+    for (const row of targetHeroRows) {
+      if (typeof row.matchId === "number" && row.isRadiant !== null) {
+        targetSideByMatch.set(row.matchId, row.isRadiant);
+      }
+    }
+
+    const targetMatchIds = [...targetSideByMatch.keys()];
+    type MatchupParticipant = {
+      matchId: number;
+      isRadiant: boolean;
+      win: boolean | null;
+      heroId: number | null;
+      itemIds: number[];
+    };
+    const participantsByMatch = new Map<number, Map<string, MatchupParticipant>>();
+    const setParticipant = (key: string, participant: MatchupParticipant) => {
+      const matchParticipants = participantsByMatch.get(participant.matchId) ?? new Map<string, MatchupParticipant>();
+      matchParticipants.set(key, participant);
+      participantsByMatch.set(participant.matchId, matchParticipants);
+    };
+    const finalInventoryItemIds = (values: Array<number | null | undefined>) =>
+      [...new Set(values.filter((itemId): itemId is number => typeof itemId === "number" && itemId > 0))].filter(
+        (itemId) => (itemCostsById.get(itemId) ?? 0) >= 1500
+      );
+
+    for (let offset = 0; offset < targetMatchIds.length; offset += 400) {
+      const matchIdChunk = targetMatchIds.slice(offset, offset + 400);
+      if (matchIdChunk.length === 0) continue;
+      const rows = await db
+        .select({
+          matchId: matchPlayers.matchId,
+          playerSlot: matchPlayers.playerSlot,
+          isRadiant: matchPlayers.isRadiant,
+          win: matchPlayers.win,
+          heroId: matchPlayers.heroId,
+          item0: matchPlayers.item0,
+          item1: matchPlayers.item1,
+          item2: matchPlayers.item2,
+          item3: matchPlayers.item3,
+          item4: matchPlayers.item4,
+          item5: matchPlayers.item5,
+          backpack0: matchPlayers.backpack0,
+          backpack1: matchPlayers.backpack1,
+          backpack2: matchPlayers.backpack2
+        })
+        .from(matchPlayers)
+        .where(inArray(matchPlayers.matchId, matchIdChunk));
+
+      for (const row of rows) {
+        if (row.isRadiant === null) continue;
+        setParticipant(row.playerSlot === null ? `row:${row.heroId ?? "unknown"}:${row.isRadiant}` : `slot:${row.playerSlot}`, {
+          matchId: row.matchId,
+          isRadiant: row.isRadiant,
+          win: row.win,
+          heroId: row.heroId,
+          itemIds: finalInventoryItemIds([
+            row.item0,
+            row.item1,
+            row.item2,
+            row.item3,
+            row.item4,
+            row.item5,
+            row.backpack0,
+            row.backpack1,
+            row.backpack2
+          ])
+        });
+      }
+
+      const rawRows = await db
+        .select({
+          entityId: rawApiPayloads.entityId,
+          rawJson: rawApiPayloads.rawJson
+        })
+        .from(rawApiPayloads)
+        .where(and(eq(rawApiPayloads.entityType, "match"), inArray(rawApiPayloads.entityId, matchIdChunk.map(String))))
+        .orderBy(desc(rawApiPayloads.fetchedAt));
+      const rawByMatch = new Map<number, string>();
+      for (const rawRow of rawRows) {
+        const matchId = Number(rawRow.entityId);
+        if (Number.isInteger(matchId) && !rawByMatch.has(matchId)) rawByMatch.set(matchId, rawRow.rawJson);
+      }
+      for (const [matchId, rawJson] of rawByMatch) {
+        const payload = parseJsonValue<{
+          radiant_win?: boolean;
+          players?: Array<{
+            player_slot?: number;
+            hero_id?: number;
+            item_0?: number;
+            item_1?: number;
+            item_2?: number;
+            item_3?: number;
+            item_4?: number;
+            item_5?: number;
+            backpack_0?: number;
+            backpack_1?: number;
+            backpack_2?: number;
+          }>;
+        }>(rawJson, {});
+        for (const player of payload.players ?? []) {
+          if (typeof player.player_slot !== "number") continue;
+          const isRadiant = player.player_slot < 128;
+          const heroId = typeof player.hero_id === "number" && Number.isInteger(player.hero_id) && player.hero_id > 0 ? player.hero_id : null;
+          setParticipant(`slot:${player.player_slot}`, {
+            matchId,
+            isRadiant,
+            win: typeof payload.radiant_win === "boolean" ? payload.radiant_win === isRadiant : null,
+            heroId,
+            itemIds: finalInventoryItemIds([
+              player.item_0,
+              player.item_1,
+              player.item_2,
+              player.item_3,
+              player.item_4,
+              player.item_5,
+              player.backpack_0,
+              player.backpack_1,
+              player.backpack_2
+            ])
+          });
+        }
+      }
+    }
+
+    const matchupSampleMatches = new Map<
+      number,
+      { withHero: boolean; againstHero: boolean; withItem: boolean; againstItem: boolean }
+    >();
+    for (const matchId of targetMatchIds) {
+      const targetSide = targetSideByMatch.get(matchId);
+      if (targetSide === undefined) continue;
+      const participants = participantsByMatch.get(matchId);
+      if (!participants) continue;
+      for (const row of participants.values()) {
+        const current =
+          matchupSampleMatches.get(matchId) ?? {
+            withHero: false,
+            againstHero: false,
+            withItem: false,
+            againstItem: false
+          };
+        const hasOtherHero = row.heroId !== null && row.heroId !== heroId;
+        const hasFinalItems = row.itemIds.length > 0;
+        if (row.isRadiant === targetSide) {
+          if (hasOtherHero) current.withHero = true;
+          if (hasFinalItems) current.withItem = true;
+        } else {
+          if (hasOtherHero) current.againstHero = true;
+          if (hasFinalItems) current.againstItem = true;
+        }
+        matchupSampleMatches.set(matchId, current);
+      }
+    }
+    const heroWithMatchSample = [...matchupSampleMatches.values()].filter((entry) => entry.withHero).length;
+    const heroAgainstMatchSample = [...matchupSampleMatches.values()].filter((entry) => entry.againstHero).length;
+    const itemWithMatchSample = [...matchupSampleMatches.values()].filter((entry) => entry.withItem).length;
+    const itemAgainstMatchSample = [...matchupSampleMatches.values()].filter((entry) => entry.againstItem).length;
+    const collectItemMatchups = async (sideMode: "with" | "against") => {
+      const itemMap = new Map<string, { itemName: string; imageUrl: string | null; games: number; wins: number; heroGames: number }>();
+      for (const matchId of targetMatchIds) {
+        const targetSide = targetSideByMatch.get(matchId);
+        if (targetSide === undefined) continue;
+        const participants = participantsByMatch.get(matchId);
+        if (!participants) continue;
+        for (const row of participants.values()) {
+          if (sideMode === "with" && row.isRadiant !== targetSide) continue;
+          if (sideMode === "against" && row.isRadiant === targetSide) continue;
+          for (const itemId of row.itemIds) {
+            const item = itemCatalogById.get(itemId);
+            if (!item) continue;
+            const current =
+              itemMap.get(item.itemInternalName) ??
+              {
+                itemName: item.itemName,
+                imageUrl: buildAssetProxyUrl(item.itemImagePath ?? defaultItemImagePath(item.itemInternalName)),
+                games: 0,
+                wins: 0,
+                heroGames: 0
+              };
+            current.games += 1;
+            if (row.win === true) current.wins += 1;
+            if (row.heroId === heroId) current.heroGames += 1;
+            itemMap.set(item.itemInternalName, current);
+          }
+        }
+      }
+      return [...itemMap.values()]
+        .map((item) => ({
+          ...item,
+          winrate: item.games ? Number(((item.wins / item.games) * 100).toFixed(1)) : 0,
+          isHeroMajority: item.heroGames > item.games / 2
+        }));
+    };
+    const itemAgainstRows = await collectItemMatchups("against");
+    const itemWithRows = await collectItemMatchups("with");
+    const matchupSort = <T extends { games: number; winrate: number }>(left: T, right: T) =>
+      right.games - left.games || right.winrate - left.winrate;
+    const lowMatchupSort = <T extends { games: number; winrate: number }>(left: T, right: T) =>
+      right.games - left.games || left.winrate - right.winrate;
+    const games = summary?.games ?? 0;
+    const wins = summary?.wins ?? 0;
+    const scopedHeroWinrate = games ? Number(((wins / games) * 100).toFixed(1)) : 50;
+    const partitionMatchups = <T extends { games: number; winrate: number }>(rows: T[]) => ({
+      highSuccess: rows.filter((row) => row.winrate >= scopedHeroWinrate).sort(matchupSort),
+      lowSuccess: rows.filter((row) => row.winrate < scopedHeroWinrate).sort(lowMatchupSort)
+    });
+    const itemAgainstGroups = partitionMatchups(itemAgainstRows);
+    const itemWithGroups = partitionMatchups(itemWithRows);
+
+    const collectHeroMatchups = async (sideMode: "with" | "against") => {
+      const heroMap = new Map<number, { heroId: number; heroName: string; heroIconUrl: string | null; games: number; wins: number }>();
+      for (const matchId of targetMatchIds) {
+        const targetSide = targetSideByMatch.get(matchId);
+        if (targetSide === undefined) continue;
+        const participants = participantsByMatch.get(matchId);
+        if (!participants) continue;
+        for (const row of participants.values()) {
+          if (row.heroId === null || row.heroId === heroId) continue;
+          if (sideMode === "with" && row.isRadiant !== targetSide) continue;
+          if (sideMode === "against" && row.isRadiant === targetSide) continue;
+          const hero = heroCatalogById.get(row.heroId);
+          const current =
+            heroMap.get(row.heroId) ??
+            {
+              heroId: row.heroId,
+              heroName: hero?.heroName ?? `Hero ${row.heroId}`,
+              heroIconUrl: buildAssetProxyUrl(hero?.heroIconPath ?? defaultHeroIconPath(hero?.heroInternalName ?? null)),
+              games: 0,
+              wins: 0
+            };
+          current.games += 1;
+          if (row.win === true) current.wins += 1;
+          heroMap.set(row.heroId, current);
+        }
+      }
+      return [...heroMap.values()]
+        .map((entry) => ({
+          ...entry,
+          winrate: entry.games ? Number(((entry.wins / entry.games) * 100).toFixed(1)) : 0
+        }));
+    };
+    const heroAgainstRows = await collectHeroMatchups("against");
+    const heroWithRows = await collectHeroMatchups("with");
+    const heroAgainstGroups = partitionMatchups(heroAgainstRows);
+    const heroWithGroups = partitionMatchups(heroWithRows);
+
     const mmrBuckets = [
       { label: "All ranks", minRankTier: null },
       { label: "Archon+", minRankTier: 40 },
@@ -2987,9 +3415,6 @@ export class DotaDataService {
       label: bucket.label,
       games: backgroundRankRows.filter((row) => row.rankTier !== null && row.rankTier >= bucket.rankTier && row.rankTier < bucket.rankTier + 10).length
     }));
-
-    const games = summary?.games ?? 0;
-    const wins = summary?.wins ?? 0;
 
     return {
       heroId,
@@ -3046,6 +3471,29 @@ export class DotaDataService {
           games: build.games,
           winrate: build.games ? Number(((build.wins / build.games) * 100).toFixed(1)) : 0
         })),
+      itemsAgainst: {
+        highSuccess: itemAgainstGroups.highSuccess,
+        lowSuccess: itemAgainstGroups.lowSuccess
+      },
+      itemsWith: {
+        highSuccess: itemWithGroups.highSuccess,
+        lowSuccess: itemWithGroups.lowSuccess
+      },
+      heroesAgainst: {
+        highSuccess: heroAgainstGroups.highSuccess,
+        lowSuccess: heroAgainstGroups.lowSuccess
+      },
+      heroesWith: {
+        highSuccess: heroWithGroups.highSuccess,
+        lowSuccess: heroWithGroups.lowSuccess
+      },
+      matchupSamples: {
+        appearances: targetMatchIds.length,
+        heroWithMatches: heroWithMatchSample,
+        heroAgainstMatches: heroAgainstMatchSample,
+        itemWithMatches: itemWithMatchSample,
+        itemAgainstMatches: itemAgainstMatchSample
+      },
       buildSamples: {
         skillMatches: [...skillBuildMap.values()].reduce((sum, build) => sum + build.games, 0),
         itemMatches: itemBuildSampleMatches

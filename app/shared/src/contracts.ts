@@ -47,6 +47,22 @@ export const playerPeerSchema = z.object({
   winrate: z.number()
 });
 
+const visionHeatmapPointSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  count: z.number(),
+  isRadiant: z.boolean().nullable()
+});
+
+const playerSmokeStatsSchema = z.object({
+  uses: z.number(),
+  inferredEvents: z.number(),
+  successes: z.number(),
+  failures: z.number(),
+  neutrals: z.number(),
+  efficiencyPercent: z.number().nullable()
+});
+
 export const playerOverviewSchema = z.object({
   playerId: z.number(),
   personaname: z.string().nullable(),
@@ -86,6 +102,8 @@ export const playerOverviewSchema = z.object({
     })
   ),
   averageObserverWardLifetimePercent: z.number().nullable(),
+  visionHeatmap: z.array(visionHeatmapPointSchema),
+  smokeStats: playerSmokeStatsSchema,
   heroUsage: z.array(playerHeroUsageSchema),
   peers: z.array(playerPeerSchema),
   matches: z.array(playerMatchSummarySchema)
@@ -119,6 +137,12 @@ export const matchParticipantSchema = z.object({
   damageTakenTimeline: z.array(z.number()).default([]),
   firstPurchaseTimes: z.record(z.string(), z.number()).default({}),
   itemUses: z.record(z.string(), z.number()).default({}),
+  smokeUseEvents: z.array(
+    z.object({
+      time: z.number(),
+      source: z.string()
+    })
+  ).default([]),
   purchaseLog: z.array(
     z.object({
       time: z.number(),
@@ -306,6 +330,24 @@ export const heroPlayerUsageSchema = z.object({
   winrate: z.number()
 });
 
+export const itemAgainstHeroSchema = z.object({
+  itemName: z.string(),
+  imageUrl: z.string().nullable(),
+  games: z.number(),
+  wins: z.number(),
+  winrate: z.number(),
+  isHeroMajority: z.boolean().default(false)
+});
+
+export const heroAgainstHeroSchema = z.object({
+  heroId: z.number(),
+  heroName: z.string(),
+  heroIconUrl: z.string().nullable(),
+  games: z.number(),
+  wins: z.number(),
+  winrate: z.number()
+});
+
 export const heroOverviewSchema = z.object({
   heroId: z.number(),
   heroName: z.string(),
@@ -355,6 +397,29 @@ export const heroOverviewSchema = z.object({
       winrate: z.number()
     })
   ),
+  itemsAgainst: z.object({
+    highSuccess: z.array(itemAgainstHeroSchema),
+    lowSuccess: z.array(itemAgainstHeroSchema)
+  }),
+  itemsWith: z.object({
+    highSuccess: z.array(itemAgainstHeroSchema),
+    lowSuccess: z.array(itemAgainstHeroSchema)
+  }),
+  heroesAgainst: z.object({
+    highSuccess: z.array(heroAgainstHeroSchema),
+    lowSuccess: z.array(heroAgainstHeroSchema)
+  }),
+  heroesWith: z.object({
+    highSuccess: z.array(heroAgainstHeroSchema),
+    lowSuccess: z.array(heroAgainstHeroSchema)
+  }),
+  matchupSamples: z.object({
+    appearances: z.number(),
+    heroWithMatches: z.number(),
+    heroAgainstMatches: z.number(),
+    itemWithMatches: z.number(),
+    itemAgainstMatches: z.number()
+  }),
   buildSamples: z.object({
     skillMatches: z.number(),
     itemMatches: z.number()

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
+  getLocalLanguageOverride,
   getSessionColorblindModeOverride,
   getSessionDarkModeOverride,
+  LOCAL_LANGUAGE_EVENT,
   SESSION_PREFERENCES_EVENT
 } from "./api/client";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -18,8 +20,19 @@ import { PlayerComparePage } from "./pages/PlayerComparePage";
 import { PlayerPage } from "./pages/PlayerPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useSettings } from "./hooks/useQueries";
+import { I18nProvider, useTranslation } from "./lib/i18n";
 
 export function App() {
+  const [language, setLanguage] = useState(() => getLocalLanguageOverride());
+  return (
+    <I18nProvider language={language}>
+      <AppContent onLanguageChange={setLanguage} />
+    </I18nProvider>
+  );
+}
+
+function AppContent({ onLanguageChange }: { onLanguageChange: (language: ReturnType<typeof getLocalLanguageOverride>) => void }) {
+  const { t } = useTranslation();
   const settings = useSettings();
   const [sessionColorblindOverride, setSessionColorblindOverride] = useState<boolean | null>(() =>
     getSessionColorblindModeOverride()
@@ -27,6 +40,16 @@ export function App() {
   const [sessionDarkModeOverride, setSessionDarkModeOverride] = useState<boolean | null>(() =>
     getSessionDarkModeOverride()
   );
+
+  useEffect(() => {
+    const syncLocalLanguage = () => {
+      onLanguageChange(getLocalLanguageOverride());
+    };
+    window.addEventListener(LOCAL_LANGUAGE_EVENT, syncLocalLanguage);
+    return () => {
+      window.removeEventListener(LOCAL_LANGUAGE_EVENT, syncLocalLanguage);
+    };
+  }, [onLanguageChange]);
 
   useEffect(() => {
     const syncSessionPreferences = () => {
@@ -53,21 +76,21 @@ export function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div>
-          <h1>Dota Analytics</h1>
+          <h1>{t("app.name")}</h1>
         </div>
         <nav className="nav">
-          <NavLink to="/">Dashboard</NavLink>
-          <NavLink to="/home">Lookup</NavLink>
-          <NavLink to="/compare">Compare</NavLink>
-          <NavLink to="/drafts">Drafts</NavLink>
-          <NavLink to="/heroes">Heroes</NavLink>
-          <NavLink to="/leagues">Leagues</NavLink>
+          <NavLink to="/">{t("nav.dashboard")}</NavLink>
+          <NavLink to="/home">{t("nav.lookup")}</NavLink>
+          <NavLink to="/compare">{t("nav.compare")}</NavLink>
+          <NavLink to="/drafts">{t("nav.drafts")}</NavLink>
+          <NavLink to="/heroes">{t("nav.heroes")}</NavLink>
+          <NavLink to="/leagues">{t("nav.leagues")}</NavLink>
           {settings.data?.savedLeagues.map((league) => (
             <NavLink key={league.leagueId} to={`/leagues/${league.leagueId}`} className="nav-subitem">
               {league.name}
             </NavLink>
           ))}
-          <NavLink to="/settings">Settings</NavLink>
+          <NavLink to="/settings">{t("nav.settings")}</NavLink>
         </nav>
       </aside>
       <main className="content">

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { draftPlanSchema, settingsSchema } from "@dota/shared";
 import type { FastifyInstance } from "fastify";
+import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { DotaDataService } from "../services/dotaDataService.js";
 import { checkDbHealth, db } from "../db/client.js";
@@ -11,6 +12,7 @@ import { providerEnrichmentWorker } from "../services/providerEnrichmentWorker.j
 
 export async function registerRoutes(app: FastifyInstance) {
   const service = new DotaDataService();
+  const draftOwnerCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*?";
   const expensiveReadRateLimit = { rateLimit: { max: 60, timeWindow: "1 minute" } };
   const expensiveWriteRateLimit = { rateLimit: { max: 6, timeWindow: "10 minutes" } };
   const adminAuthRateLimit = { rateLimit: { max: 5, timeWindow: "15 minutes" } };
@@ -63,10 +65,19 @@ export async function registerRoutes(app: FastifyInstance) {
   const getDraftOwnerKey = (request: { headers: Record<string, unknown> }) => {
     const rawHeader = request.headers["x-draft-owner-key"];
     const value = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-    if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{16,128}$/.test(value)) {
+    if (typeof value !== "string" || !/^[\x21-\x7e]{10,128}$/.test(value)) {
       throw new Error("Missing draft owner key.");
     }
     return value;
+  };
+  const createDraftOwnerCode = async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const bytes = randomBytes(10);
+      const code = Array.from(bytes, (byte) => draftOwnerCodeAlphabet[byte % draftOwnerCodeAlphabet.length]).join("");
+      const existing = await db.select({ ownerKey: draftPlans.ownerKey }).from(draftPlans).where(eq(draftPlans.ownerKey, code)).limit(1);
+      if (existing.length === 0) return code;
+    }
+    throw new Error("Failed to create a unique draft access code.");
   };
   const mapDraftPlanRow = (row: typeof draftPlans.$inferSelect) => ({
     id: row.id,
@@ -190,6 +201,15 @@ export async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to load draft plans." };
+    }
+  });
+
+  app.post("/api/draft-owner-code", async (_request, reply) => {
+    try {
+      return { ownerKey: await createDraftOwnerCode() };
+    } catch (error) {
+      reply.code(500);
+      return { message: error instanceof Error ? error.message : "Failed to create draft access code." };
     }
   });
 
@@ -339,7 +359,7 @@ export async function registerRoutes(app: FastifyInstance) {
   app.get("/api/matches/:matchId", { config: expensiveReadRateLimit }, async (request, reply) => {
     const params = z.object({ matchId: z.coerce.number().int().positive() }).parse(request.params);
     try {
-      return await service.getMatchOverview(params.matchId);
+      return await service.getMatchOverview(params.matchId, { cacheOnly: true });
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to load match." };

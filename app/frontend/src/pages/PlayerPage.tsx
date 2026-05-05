@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
@@ -18,7 +18,7 @@ import {
   setLocalAutoRefreshPlayerIdsOverride,
   setLocalFavoritePlayerIdsOverride
 } from "../api/client";
-import { formatDate, formatDuration } from "../lib/format";
+import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
 type SortKey = "startTime" | "durationSeconds" | "heroName" | "kda" | "result" | "parsedData";
 type ResultFilter = "all" | "wins" | "losses";
@@ -31,11 +31,6 @@ function calculateKda(kills: number | null, deaths: number | null, assists: numb
   return total / safeDeaths;
 }
 
-function formatDayKey(timestamp: number | null) {
-  if (!timestamp) return null;
-  return new Date(timestamp).toISOString().slice(0, 10);
-}
-
 function formatRank(rankTier: number | null, leaderboardRank: number | null) {
   if (!rankTier) return "Unknown";
   const medal = Math.floor(rankTier / 10);
@@ -44,6 +39,20 @@ function formatRank(rankTier: number | null, leaderboardRank: number | null) {
   const medalName = medalNames[medal] ?? `Tier ${rankTier}`;
   if (leaderboardRank) return `${medalName} (#${leaderboardRank})`;
   return stars > 0 ? `${medalName} ${stars}` : medalName;
+}
+
+function normalizeDotaMapCoordinate(value: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value >= 0 && value <= 1) return value * 100;
+  if (value >= 0 && value <= 255) return (value / 255) * 100;
+  const clamped = Math.max(-8200, Math.min(8200, value));
+  return ((clamped + 8200) / 16400) * 100;
+}
+
+function projectWardCoordinateToMinimapPercent(value: number | null) {
+  const normalized = normalizeDotaMapCoordinate(value);
+  if (normalized === null) return null;
+  return Math.max(1.5, Math.min(98.5, 50 + (normalized - 50) * 1.539));
 }
 
 export function PlayerPage() {
@@ -199,22 +208,20 @@ export function PlayerPage() {
   const heroUsagePagination = usePagination(filteredHeroUsage.length, 12, [12, 24, 50, 100]);
   const pagedHeroUsage = heroUsagePagination.paged(filteredHeroUsage);
 
-  const activityMap = new Map<string, { wins: number; losses: number; total: number }>();
-  for (const match of playerData?.matches ?? []) {
-    const dayKey = formatDayKey(match.startTime);
-    if (!dayKey) continue;
-
-    const entry = activityMap.get(dayKey) ?? { wins: 0, losses: 0, total: 0 };
-    entry.total += 1;
-    if (match.win === true) entry.wins += 1;
-    if (match.win === false) entry.losses += 1;
-    activityMap.set(dayKey, entry);
-  }
-
-  const activityDays = [...activityMap.entries()]
-    .sort((left, right) => left[0].localeCompare(right[0]))
-    .slice(-84);
-  const maxDailyMatches = Math.max(1, ...activityDays.map(([, value]) => value.total));
+  const visionHeatmapPoints = useMemo(() => {
+    const points = (playerData?.visionHeatmap ?? [])
+      .map((point) => ({
+        ...point,
+        left: projectWardCoordinateToMinimapPercent(point.x),
+        top: projectWardCoordinateToMinimapPercent(point.y)
+      }))
+      .filter((point): point is typeof point & { left: number; top: number } => point.left !== null && point.top !== null);
+    const maxCount = Math.max(1, ...points.map((point) => point.count));
+    return points.map((point) => ({
+      ...point,
+      intensity: point.count / maxCount
+    }));
+  }, [playerData?.visionHeatmap]);
 
   const toggleSort = (nextKey: SortKey) => {
     if (sortKey === nextKey) {
@@ -406,47 +413,47 @@ export function PlayerPage() {
           </div>
 
           {activeTab === "overview" ? (
-          <div className="two-column two-column-balanced">
-              <Card title="Performance radar">
-                <StatsRadarChart
-                  key={playerData.playerId}
-                  players={[
-                    {
-                      playerId: playerData.playerId,
-                      personaname: playerData.personaname,
-                      comparisonStats: playerData.comparisonStats
-                    }
-                  ]}
-                  compact
-                />
-              </Card>
-              <Card title="Match activity calendar">
-                {activityDays.length === 0 ? (
-                  <EmptyState label="No locally stored matches yet." />
-                ) : (
-                  <div className="stack compact">
-                    <div className="calendar-grid">
-                      {activityDays.map(([day, stats]) => {
-                        const bubbleSize = 12 + Math.round((stats.total / maxDailyMatches) * 20);
-                        const tone =
-                          stats.wins > stats.losses ? "win" : stats.losses > stats.wins ? "loss" : "neutral";
-
-                        return (
-                          <div
-                            key={day}
-                            className="calendar-cell"
-                            title={`${day} | ${stats.total} matches | ${stats.wins}W / ${stats.losses}L`}
-                          >
-                            <span className="calendar-day">{day.slice(8)}</span>
-                            <span className={`calendar-bubble ${tone}`} style={{ width: `${bubbleSize}px`, height: `${bubbleSize}px` }} />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </Card>
-          </div>
+          <>
+          <Card title="Performance radar">
+            <StatsRadarChart
+              key={playerData.playerId}
+              players={[
+                {
+                  playerId: playerData.playerId,
+                  personaname: playerData.personaname,
+                  comparisonStats: playerData.comparisonStats
+                }
+              ]}
+              compact
+            />
+          </Card>
+          <Card title="Vision heat map">
+            {visionHeatmapPoints.length === 0 ? (
+              <EmptyState label="No observer ward coordinates are available for this player's active scope yet." />
+            ) : (
+              <div className="vision-heatmap-board" aria-label="Player observer ward heatmap">
+                <img className="vision-map-image" src="/api/assets/dota-map" alt="Dota 2 minimap" />
+                {visionHeatmapPoints.map((point, index) => {
+                  const size = 12 + point.intensity * 34;
+                  return (
+                    <span
+                      key={`${point.x}-${point.y}-${index}`}
+                      className="vision-heatmap-point"
+                      style={{
+                        left: `${point.left}%`,
+                        top: `${100 - point.top}%`,
+                        width: `${size}px`,
+                        height: `${size}px`,
+                        opacity: 0.24 + point.intensity * 0.58
+                      }}
+                      title={`${formatNumber(point.count)} observer placements`}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+          </>
           ) : null}
 
           {activeTab === "heroes" || activeTab === "teammates" ? (
