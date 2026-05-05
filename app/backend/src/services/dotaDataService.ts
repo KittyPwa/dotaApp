@@ -1005,6 +1005,7 @@ export class DotaDataService {
   }
 
   private upsertEnrichmentQueueEntry(matchId: number, provider: EnrichmentProvider, nextAttemptAt = Date.now()) {
+    const now = Date.now();
     sqliteDb
       .prepare(
         `
@@ -1021,16 +1022,18 @@ export class DotaDataService {
           on conflict(match_id, provider) do update set
             status = case
               when provider_enrichment_queue.status in ('full', 'expired', 'unavailable') then provider_enrichment_queue.status
+              when provider_enrichment_queue.next_attempt_at > ? then provider_enrichment_queue.status
               else 'queued'
             end,
             next_attempt_at = case
               when provider_enrichment_queue.status in ('full', 'expired', 'unavailable') then provider_enrichment_queue.next_attempt_at
+              when provider_enrichment_queue.next_attempt_at > ? then provider_enrichment_queue.next_attempt_at
               else min(provider_enrichment_queue.next_attempt_at, excluded.next_attempt_at)
             end,
             updated_at = excluded.updated_at
         `
       )
-      .run(matchId, provider, nextAttemptAt, Date.now(), Date.now());
+      .run(matchId, provider, nextAttemptAt, now, now, now, now);
   }
 
   async getProviderEnrichmentQueueSummary() {
@@ -4605,6 +4608,11 @@ export class DotaDataService {
   async testStratz(playerId: number) {
     const adapter = await this.createStratzAdapter();
     return adapter.getPlayerBasic(playerId);
+  }
+
+  async testStratzMatchTelemetry(matchId: number) {
+    const adapter = await this.createStratzAdapter();
+    return adapter.getMatchTelemetry(matchId);
   }
 
   async testSteamLeague(leagueId: number) {
