@@ -425,9 +425,17 @@ export async function registerRoutes(app: FastifyInstance) {
       reply.code(403);
       return { message: "Admin access required." };
     }
+    const body = z
+      .object({ provider: z.enum(["stratz", "opendota_parse"]).nullable().optional() })
+      .parse(request.body ?? {});
     try {
-      const result = await service.processProviderEnrichmentQueue({ limit: 1, bypassConstraints: true });
+      const result = await service.processProviderEnrichmentQueue({
+        limit: 1,
+        bypassConstraints: true,
+        provider: body.provider ?? undefined
+      });
       logger.info("Provider enrichment override processed", {
+        provider: body.provider ?? null,
         processed: result.processed.length,
         firstJob: result.processed[0] ?? null
       });

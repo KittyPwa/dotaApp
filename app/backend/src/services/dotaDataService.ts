@@ -1312,14 +1312,21 @@ export class DotaDataService {
       .run(nextAttemptAt, lastError, Date.now(), provider, Date.now());
   }
 
-  async processProviderEnrichmentQueue(options?: { limit?: number; bypassConstraints?: boolean }) {
+  async processProviderEnrichmentQueue(options?: { limit?: number; bypassConstraints?: boolean; provider?: EnrichmentProvider }) {
     const bypassConstraints = options?.bypassConstraints ?? false;
     const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
     const now = Date.now();
     const settings = await this.settingsService.getSettings({ includeProtected: true });
     const statusFilter = bypassConstraints ? "'queued', 'failed', 'waiting', 'unavailable'" : "'queued', 'failed', 'waiting'";
     const dueFilter = bypassConstraints ? "" : "and next_attempt_at <= ?";
-    const queryArgs = bypassConstraints ? [limit] : [now, limit];
+    const providerFilter = options?.provider ? "and provider = ?" : "";
+    const queryArgs = bypassConstraints
+      ? options?.provider
+        ? [options.provider, limit]
+        : [limit]
+      : options?.provider
+        ? [now, options.provider, limit]
+        : [now, limit];
     const actionableFirstOrder = bypassConstraints
       ? `
             case
@@ -1370,6 +1377,7 @@ export class DotaDataService {
           from provider_enrichment_queue
           where status in (${statusFilter})
             ${dueFilter}
+            ${providerFilter}
           order by
             ${actionableFirstOrder}
             case provider

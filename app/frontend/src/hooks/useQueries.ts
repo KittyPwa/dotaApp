@@ -308,7 +308,8 @@ export function useProcessProviderEnrichmentOverride() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => apiPost<ProviderEnrichmentProcessResponse>("/api/provider-enrichment/process-override", {}),
+    mutationFn: (provider?: "stratz" | "opendota_parse" | null) =>
+      apiPost<ProviderEnrichmentProcessResponse>("/api/provider-enrichment/process-override", { provider: provider ?? null }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["provider-enrichment"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });

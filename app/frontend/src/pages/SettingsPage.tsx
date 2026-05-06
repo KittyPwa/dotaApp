@@ -107,6 +107,7 @@ export function SettingsPage() {
   const [diagRunning, setDiagRunning] = useState<null | "backend" | "browser" | "steam">(null);
   const [enrichmentCandidateLimit, setEnrichmentCandidateLimit] = useState("200");
   const [enrichmentProcessLimit, setEnrichmentProcessLimit] = useState("5");
+  const [enrichmentOverrideProvider, setEnrichmentOverrideProvider] = useState<"any" | "opendota_parse" | "stratz">("stratz");
   const [providerWorkerEnabled, setProviderWorkerEnabled] = useState(false);
   const [providerWorkerIntervalMinutes, setProviderWorkerIntervalMinutes] = useState("30");
   const [providerWorkerScanLimit, setProviderWorkerScanLimit] = useState("200");
@@ -721,6 +722,20 @@ export function SettingsPage() {
                         onChange={(event) => setProviderEnrichmentMaxAttempts(event.target.value)}
                       />
                     </label>
+                    <label>
+                      Force provider
+                      <select
+                        disabled={!canManagePersistentSettings || processProviderEnrichmentOverride.isPending}
+                        value={enrichmentOverrideProvider}
+                        onChange={(event) =>
+                          setEnrichmentOverrideProvider(event.target.value === "opendota_parse" || event.target.value === "stratz" ? event.target.value : "any")
+                        }
+                      >
+                        <option value="stratz">STRATZ</option>
+                        <option value="opendota_parse">OpenDota parse</option>
+                        <option value="any">Any provider</option>
+                      </select>
+                    </label>
                   </div>
                   {providerEnrichment.isLoading ? <LoadingState label="Loading provider queue..." /> : null}
                   {providerEnrichment.error ? <ErrorState error={providerEnrichment.error as Error} /> : null}
@@ -964,7 +979,7 @@ export function SettingsPage() {
                       disabled={!canManagePersistentSettings || processProviderEnrichment.isPending || processProviderEnrichmentOverride.isPending}
                       onClick={() => {
                         setEnrichmentResult(null);
-                        processProviderEnrichmentOverride.mutate(undefined, {
+                        processProviderEnrichmentOverride.mutate(enrichmentOverrideProvider === "any" ? null : enrichmentOverrideProvider, {
                           onSuccess: (result: ProviderEnrichmentProcessResponse) => {
                             const processed = result.processed[0];
                             setEnrichmentResult(
