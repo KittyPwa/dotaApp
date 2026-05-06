@@ -57,7 +57,7 @@ export function runMigrations() {
       provider text primary key,
       observed_at integer not null,
       status_code integer,
-      limit integer,
+      quota_limit integer,
       remaining integer,
       reset_at integer,
       retry_after_seconds integer,

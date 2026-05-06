@@ -233,7 +233,7 @@ export const providerQuotaSnapshots = sqliteTable("provider_quota_snapshots", {
   provider: text("provider").primaryKey(),
   observedAt: integer("observed_at", { mode: "timestamp_ms" }).notNull(),
   statusCode: integer("status_code"),
-  limit: integer("limit"),
+  limit: integer("quota_limit"),
   remaining: integer("remaining"),
   resetAt: integer("reset_at", { mode: "timestamp_ms" }),
   retryAfterSeconds: integer("retry_after_seconds"),
