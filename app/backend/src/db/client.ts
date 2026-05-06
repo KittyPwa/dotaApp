@@ -61,6 +61,7 @@ export function runMigrations() {
       remaining integer,
       reset_at integer,
       retry_after_seconds integer,
+      buckets_json text,
       raw_headers_json text
     );
     CREATE TABLE IF NOT EXISTS draft_plans (
@@ -114,6 +115,7 @@ export function runMigrations() {
   ensureColumn("match_players", "item_neutral", "integer");
   ensureColumn("matches", "radiant_team_id", "integer");
   ensureColumn("matches", "dire_team_id", "integer");
+  ensureColumn("provider_quota_snapshots", "buckets_json", "text");
   ensureColumn("heroes", "icon_path", "text");
   ensureColumn("heroes", "portrait_path", "text");
   ensureColumn("items", "image_path", "text");

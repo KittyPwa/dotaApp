@@ -1143,6 +1143,14 @@ export class DotaDataService {
             remaining: snapshot.remaining,
             resetAt: snapshot.resetAt,
             retryAfterSeconds: snapshot.retryAfterSeconds,
+            buckets: parseJsonValue<
+              Record<"second" | "minute" | "hour" | "day", { limit: number | null; remaining: number | null } | null>
+            >(snapshot.bucketsJson, {
+              second: null,
+              minute: null,
+              hour: null,
+              day: null
+            }),
             rawHeaders: parseJsonValue<Record<string, string>>(snapshot.rawHeadersJson, {})
           }
         : null;

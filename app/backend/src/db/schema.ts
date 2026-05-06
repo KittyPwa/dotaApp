@@ -237,6 +237,7 @@ export const providerQuotaSnapshots = sqliteTable("provider_quota_snapshots", {
   remaining: integer("remaining"),
   resetAt: integer("reset_at", { mode: "timestamp_ms" }),
   retryAfterSeconds: integer("retry_after_seconds"),
+  bucketsJson: text("buckets_json"),
   rawHeadersJson: text("raw_headers_json")
 });
 

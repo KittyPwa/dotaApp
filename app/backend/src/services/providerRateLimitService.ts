@@ -35,6 +35,20 @@ function normalizeResetAt(value: number | null) {
   return value < 10_000_000_000 ? value * 1000 : value;
 }
 
+function parseQuotaBucket(headers: Headers, window: "second" | "minute" | "hour" | "day") {
+  const limit = parseIntegerHeader(headers, [
+    `x-ratelimit-limit-${window}`,
+    `x-rate-limit-limit-${window}`,
+    `ratelimit-limit-${window}`
+  ]);
+  const remaining = parseIntegerHeader(headers, [
+    `x-ratelimit-remaining-${window}`,
+    `x-rate-limit-remaining-${window}`,
+    `ratelimit-remaining-${window}`
+  ]);
+  return limit === null && remaining === null ? null : { limit, remaining };
+}
+
 export class ProviderRateLimitService {
   getUsage(provider: string) {
     const now = Date.now();
@@ -139,10 +153,25 @@ export class ProviderRateLimitService {
       "calls-remaining",
       "x-quota-remaining"
     ]);
-    const resetAt = normalizeResetAt(parseIntegerHeader(headers, ["x-ratelimit-reset", "x-rate-limit-reset", "ratelimit-reset"]));
+    const buckets = {
+      second: parseQuotaBucket(headers, "second"),
+      minute: parseQuotaBucket(headers, "minute"),
+      hour: parseQuotaBucket(headers, "hour"),
+      day: parseQuotaBucket(headers, "day")
+    };
+    const effectiveLimit = buckets.day?.limit ?? limit;
+    const effectiveRemaining = buckets.day?.remaining ?? remaining;
+    const resetSeconds = parseIntegerHeader(headers, ["x-ratelimit-reset", "x-rate-limit-reset", "ratelimit-reset"]);
+    const resetAt = resetSeconds !== null ? Date.now() + resetSeconds * 1000 : null;
     const retryAfterSeconds = parseIntegerHeader(headers, ["retry-after"]);
 
-    if (Object.keys(rawHeaders).length === 0 && limit === null && remaining === null && resetAt === null && retryAfterSeconds === null) {
+    if (
+      Object.keys(rawHeaders).length === 0 &&
+      effectiveLimit === null &&
+      effectiveRemaining === null &&
+      resetAt === null &&
+      retryAfterSeconds === null
+    ) {
       return;
     }
 
@@ -157,9 +186,10 @@ export class ProviderRateLimitService {
             remaining,
             reset_at,
             retry_after_seconds,
+            buckets_json,
             raw_headers_json
           )
-          values (?, ?, ?, ?, ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict(provider) do update set
             observed_at = excluded.observed_at,
             status_code = excluded.status_code,
@@ -167,10 +197,21 @@ export class ProviderRateLimitService {
             remaining = excluded.remaining,
             reset_at = excluded.reset_at,
             retry_after_seconds = excluded.retry_after_seconds,
+            buckets_json = excluded.buckets_json,
             raw_headers_json = excluded.raw_headers_json
         `
       )
-      .run(provider, Date.now(), statusCode, limit, remaining, resetAt, retryAfterSeconds, JSON.stringify(rawHeaders));
+      .run(
+        provider,
+        Date.now(),
+        statusCode,
+        effectiveLimit,
+        effectiveRemaining,
+        resetAt,
+        retryAfterSeconds,
+        JSON.stringify(buckets),
+        JSON.stringify(rawHeaders)
+      );
   }
 
   getQuotaSnapshot(provider: string) {
@@ -185,6 +226,7 @@ export class ProviderRateLimitService {
             remaining,
             reset_at as resetAt,
             retry_after_seconds as retryAfterSeconds,
+            buckets_json as bucketsJson,
             raw_headers_json as rawHeadersJson
           from provider_quota_snapshots
           where provider = ?
@@ -199,6 +241,7 @@ export class ProviderRateLimitService {
           remaining: number | null;
           resetAt: number | null;
           retryAfterSeconds: number | null;
+          bucketsJson: string | null;
           rawHeadersJson: string | null;
         }
       | undefined;

@@ -830,6 +830,9 @@ export function SettingsPage() {
                                   const quotaLabel = quota
                                     ? `${quota.remaining ?? "?"} remaining${quota.limit !== null ? ` / ${quota.limit}` : ""}`
                                     : "No provider header";
+                                  const bucketLabel = quota?.buckets.day
+                                    ? `day ${quota.buckets.day.remaining ?? "?"} / ${quota.buckets.day.limit ?? "?"}`
+                                    : null;
                                   return (
                                     <tr key={entry.provider}>
                                       <td>{entry.provider}</td>
@@ -839,6 +842,7 @@ export function SettingsPage() {
                                       <td>{entry.usage.day} / {entry.limits.perDay}</td>
                                       <td>
                                         <span>{quotaLabel}</span>
+                                        {bucketLabel ? <span className="muted-inline"> ({bucketLabel})</span> : null}
                                         {quota?.resetAt ? (
                                           <span className="muted-inline"> reset {formatProviderDateTime(quota.resetAt)}</span>
                                         ) : null}

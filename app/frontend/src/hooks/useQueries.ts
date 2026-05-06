@@ -32,6 +32,7 @@ export type ProviderEnrichmentSummary = {
       remaining: number | null;
       resetAt: number | null;
       retryAfterSeconds: number | null;
+      buckets: Record<"second" | "minute" | "hour" | "day", { limit: number | null; remaining: number | null } | null>;
       rawHeaders: Record<string, string>;
     } | null;
   }>;
