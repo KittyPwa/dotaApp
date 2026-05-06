@@ -1206,8 +1206,9 @@ export class DotaDataService {
     return staleFullMatchIds.length;
   }
 
-  async enqueueProviderEnrichmentCandidates(options?: { limit?: number }) {
+  async enqueueProviderEnrichmentCandidates(options?: { limit?: number; includeStratz?: boolean }) {
     const limit = Math.min(Math.max(options?.limit ?? 200, 1), 1000);
+    const includeStratz = options?.includeStratz ?? true;
     const now = Date.now();
     const openDotaReplayWindowMs = 10 * 24 * 60 * 60 * 1000;
     const rows = sqliteDb
@@ -1229,8 +1230,10 @@ export class DotaDataService {
     let openDotaParseQueued = 0;
 
     for (const row of rows) {
-      this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
-      stratzQueued += 1;
+      if (includeStratz) {
+        this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
+        stratzQueued += 1;
+      }
 
       if (row.startTime && row.startTime >= now - openDotaReplayWindowMs) {
         this.upsertEnrichmentQueueEntry(row.id, "opendota_parse", now);
@@ -1295,6 +1298,7 @@ export class DotaDataService {
     const settings = await this.settingsService.getSettings({ includeProtected: true });
     const statusFilter = bypassConstraints ? "'queued', 'failed', 'waiting', 'unavailable'" : "'queued', 'failed', 'waiting'";
     const dueFilter = bypassConstraints ? "" : "and next_attempt_at <= ?";
+    const providerFilter = bypassConstraints ? "" : "and provider = 'opendota_parse'";
     const queryArgs = bypassConstraints ? [limit] : [now, limit];
     const rows = sqliteDb
       .prepare(
@@ -1303,6 +1307,7 @@ export class DotaDataService {
           from provider_enrichment_queue
           where status in (${statusFilter})
             ${dueFilter}
+            ${providerFilter}
           order by
             case provider
               when 'opendota_parse' then 0
