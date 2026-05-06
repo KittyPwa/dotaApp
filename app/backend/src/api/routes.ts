@@ -8,6 +8,7 @@ import { checkDbHealth, db } from "../db/client.js";
 import { draftPlans } from "../db/schema.js";
 import { getCachedAssetBuffer, getCachedCurrentDotaMapBuffer, getMimeType } from "../utils/assets.js";
 import { config } from "../utils/config.js";
+import { logger } from "../utils/logger.js";
 import { providerEnrichmentWorker } from "../services/providerEnrichmentWorker.js";
 
 export async function registerRoutes(app: FastifyInstance) {
@@ -425,7 +426,12 @@ export async function registerRoutes(app: FastifyInstance) {
       return { message: "Admin access required." };
     }
     try {
-      return await service.processProviderEnrichmentQueue({ limit: 1, bypassConstraints: true });
+      const result = await service.processProviderEnrichmentQueue({ limit: 1, bypassConstraints: true });
+      logger.info("Provider enrichment override processed", {
+        processed: result.processed.length,
+        firstJob: result.processed[0] ?? null
+      });
+      return result;
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to process provider enrichment override." };

@@ -59,6 +59,31 @@ async function deleteJson(path: string, headers?: Record<string, string>) {
   return payload;
 }
 
+async function waitForHealth(child: ReturnType<typeof spawn>) {
+  let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  child.once("exit", (code, signal) => {
+    childExit = { code, signal };
+  });
+
+  const deadline = Date.now() + 20_000;
+  let lastError: unknown = null;
+
+  while (Date.now() < deadline) {
+    if (childExit) {
+      throw new Error(`Backend exited before smoke checks started: ${JSON.stringify(childExit)}`);
+    }
+
+    try {
+      return (await getJson("/api/health")) as { ok: boolean };
+    } catch (error) {
+      lastError = error;
+      await delay(500);
+    }
+  }
+
+  throw new Error(`Backend did not become ready for smoke checks: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
 async function main() {
   const child = spawn(process.execPath, ["app/backend/dist/server.js"], {
     cwd: process.cwd(),
@@ -73,9 +98,7 @@ async function main() {
   });
 
   try {
-    await delay(4000);
-
-    const health = (await getJson("/api/health")) as { ok: boolean };
+    const health = await waitForHealth(child);
     const dashboard = (await getJson("/api/dashboard")) as { totalStoredMatches: number };
     const heroes = (await getJson("/api/heroes/stats")) as Array<{ heroId: number }>;
     const enrichmentRoute = await getStatus("/api/provider-enrichment");

@@ -966,7 +966,14 @@ export function SettingsPage() {
                         setEnrichmentResult(null);
                         processProviderEnrichmentOverride.mutate(undefined, {
                           onSuccess: (result: ProviderEnrichmentProcessResponse) => {
-                            setEnrichmentResult(`Override processed ${result.processed.length} job.`);
+                            const processed = result.processed[0];
+                            setEnrichmentResult(
+                              processed
+                                ? `Override processed ${processed.provider} match ${processed.matchId}: ${processed.status}. ${
+                                    processed.message ?? "No provider message."
+                                  }`
+                                : "Override found no eligible provider jobs."
+                            );
                           },
                           onError: (error) =>
                             setEnrichmentResult(error instanceof Error ? error.message : "Failed to process provider override.")
