@@ -981,12 +981,15 @@ export function SettingsPage() {
                         setEnrichmentResult(null);
                         processProviderEnrichmentOverride.mutate(enrichmentOverrideProvider === "any" ? null : enrichmentOverrideProvider, {
                           onSuccess: (result: ProviderEnrichmentProcessResponse) => {
-                            const processed = result.processed[0];
+                            const processed = result.processed;
                             setEnrichmentResult(
-                              processed
-                                ? `Override processed ${processed.provider} match ${processed.matchId}: ${processed.status}. ${
-                                    processed.message ?? "No provider message."
-                                  }`
+                              processed.length
+                                ? `Override processed ${processed.length} job${processed.length === 1 ? "" : "s"}: ${processed
+                                    .map(
+                                      (entry) =>
+                                        `${entry.provider} match ${entry.matchId}: ${entry.status}. ${entry.message ?? "No provider message."}`
+                                    )
+                                    .join(" | ")}`
                                 : "Override found no eligible provider jobs."
                             );
                           },

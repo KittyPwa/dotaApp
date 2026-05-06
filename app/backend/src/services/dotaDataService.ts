@@ -1528,6 +1528,24 @@ export class DotaDataService {
     };
   }
 
+  async processProviderEnrichmentProvidersOverride(providers: EnrichmentProvider[]) {
+    const processed: Array<{ matchId: number; provider: EnrichmentProvider; status: EnrichmentStatus; message: string | null }> = [];
+
+    for (const provider of providers) {
+      const result = await this.processProviderEnrichmentQueue({
+        limit: 1,
+        bypassConstraints: true,
+        provider
+      });
+      processed.push(...result.processed);
+    }
+
+    return {
+      processed,
+      summary: await this.getProviderEnrichmentQueueSummary()
+    };
+  }
+
   async ensureReferenceData() {
     const adapter = await this.createOpenDotaAdapter();
     await new ReferenceDataService(adapter, this.rawPayloads).syncIfStale();

@@ -429,11 +429,13 @@ export async function registerRoutes(app: FastifyInstance) {
       .object({ provider: z.enum(["stratz", "opendota_parse"]).nullable().optional() })
       .parse(request.body ?? {});
     try {
-      const result = await service.processProviderEnrichmentQueue({
-        limit: 1,
-        bypassConstraints: true,
-        provider: body.provider ?? undefined
-      });
+      const result = body.provider
+        ? await service.processProviderEnrichmentQueue({
+            limit: 1,
+            bypassConstraints: true,
+            provider: body.provider
+          })
+        : await service.processProviderEnrichmentProvidersOverride(["opendota_parse", "stratz"]);
       logger.info("Provider enrichment override processed", {
         provider: body.provider ?? null,
         processed: result.processed.length,
