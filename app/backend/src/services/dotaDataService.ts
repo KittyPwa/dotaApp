@@ -1139,7 +1139,7 @@ export class DotaDataService {
         ? {
             observedAt: snapshot.observedAt,
             statusCode: snapshot.statusCode,
-            limit: snapshot.limit,
+            limit: snapshot.quotaLimit,
             remaining: snapshot.remaining,
             resetAt: snapshot.resetAt,
             retryAfterSeconds: snapshot.retryAfterSeconds,

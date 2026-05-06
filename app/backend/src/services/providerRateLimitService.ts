@@ -181,7 +181,7 @@ export class ProviderRateLimitService {
             provider,
             observed_at as observedAt,
             status_code as statusCode,
-            quota_limit as limit,
+            quota_limit as quotaLimit,
             remaining,
             reset_at as resetAt,
             retry_after_seconds as retryAfterSeconds,
@@ -195,7 +195,7 @@ export class ProviderRateLimitService {
           provider: string;
           observedAt: number;
           statusCode: number | null;
-          limit: number | null;
+          quotaLimit: number | null;
           remaining: number | null;
           resetAt: number | null;
           retryAfterSeconds: number | null;
