@@ -1320,6 +1320,49 @@ export class DotaDataService {
     const statusFilter = bypassConstraints ? "'queued', 'failed', 'waiting', 'unavailable'" : "'queued', 'failed', 'waiting'";
     const dueFilter = bypassConstraints ? "" : "and next_attempt_at <= ?";
     const queryArgs = bypassConstraints ? [limit] : [now, limit];
+    const actionableFirstOrder = bypassConstraints
+      ? `
+            case
+              when (
+                select count(*)
+                from match_players mp
+                where mp.match_id = provider_enrichment_queue.match_id
+              ) >= 10
+                and (
+                  select count(*)
+                  from match_players mp
+                  where mp.match_id = provider_enrichment_queue.match_id
+                    and (
+                      (mp.gold_t_json is not null and json_valid(mp.gold_t_json) and json_array_length(mp.gold_t_json) > 0)
+                      or (mp.xp_t_json is not null and json_valid(mp.xp_t_json) and json_array_length(mp.xp_t_json) > 0)
+                      or (mp.lh_t_json is not null and json_valid(mp.lh_t_json) and json_array_length(mp.lh_t_json) > 0)
+                    )
+                ) >= 10
+                and (
+                  select count(*)
+                  from match_players mp
+                  where mp.match_id = provider_enrichment_queue.match_id
+                    and (
+                      (mp.first_purchase_time_json is not null and json_valid(mp.first_purchase_time_json) and json_array_length(mp.first_purchase_time_json) > 0)
+                      or (mp.purchase_log_json is not null and json_valid(mp.purchase_log_json) and json_array_length(mp.purchase_log_json) > 0)
+                    )
+                ) >= 10
+                and (
+                  select count(*)
+                  from match_players mp
+                  where mp.match_id = provider_enrichment_queue.match_id
+                    and (
+                      (mp.obs_log_json is not null and json_valid(mp.obs_log_json) and json_array_length(mp.obs_log_json) > 0)
+                      or (mp.sen_log_json is not null and json_valid(mp.sen_log_json) and json_array_length(mp.sen_log_json) > 0)
+                      or mp.obs_placed is not null
+                      or mp.sen_placed is not null
+                    )
+                ) > 0
+              then 1
+              else 0
+            end,
+        `
+      : "";
     const rows = sqliteDb
       .prepare(
         `
@@ -1328,6 +1371,7 @@ export class DotaDataService {
           where status in (${statusFilter})
             ${dueFilter}
           order by
+            ${actionableFirstOrder}
             case provider
               when 'opendota_parse' then 0
               else 1
