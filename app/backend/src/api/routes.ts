@@ -401,6 +401,11 @@ export async function registerRoutes(app: FastifyInstance) {
     try {
       return await service.enqueueProviderEnrichmentCandidates({ limit: body.limit });
     } catch (error) {
+      logger.error("Provider enrichment enqueue failed", {
+        limit: body.limit ?? null,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : null
+      });
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to enqueue provider enrichment." };
     }
@@ -415,6 +420,11 @@ export async function registerRoutes(app: FastifyInstance) {
     try {
       return await service.processProviderEnrichmentQueue({ limit: body.limit });
     } catch (error) {
+      logger.error("Provider enrichment process failed", {
+        limit: body.limit ?? null,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : null
+      });
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to process provider enrichment." };
     }
@@ -443,6 +453,11 @@ export async function registerRoutes(app: FastifyInstance) {
       });
       return result;
     } catch (error) {
+      logger.error("Provider enrichment override failed", {
+        provider: body.provider ?? null,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : null
+      });
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to process provider enrichment override." };
     }

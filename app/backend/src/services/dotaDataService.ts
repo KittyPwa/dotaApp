@@ -1232,16 +1232,23 @@ export class DotaDataService {
     const includeStratz = options?.includeStratz ?? true;
     const now = Date.now();
     const openDotaReplayWindowMs = 10 * 24 * 60 * 60 * 1000;
-    const rows = sqliteDb
-      .prepare(
-        `
+    const candidateSql = `
           select id, start_time as startTime
           from matches
           order by coalesce(start_time, 0) desc
           limit ?
-        `
-      )
-      .all(limit) as Array<{ id: number; startTime: number | null }>;
+        `;
+    let rows: Array<{ id: number; startTime: number | null }>;
+    try {
+      rows = sqliteDb.prepare(candidateSql).all(limit) as Array<{ id: number; startTime: number | null }>;
+    } catch (error) {
+      logger.error("Provider enrichment candidate query failed", {
+        limit,
+        sql: candidateSql,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
     await this.requeueFalseFullEnrichmentEntries(
       rows.map((row) => row.id),
       now
@@ -1405,9 +1412,7 @@ export class DotaDataService {
             end,
         `
       : "";
-    const rows = sqliteDb
-      .prepare(
-        `
+    const queueSql = `
           select id, match_id as matchId, provider, attempts
           from provider_enrichment_queue
           where status in (${statusFilter})
@@ -1422,9 +1427,26 @@ export class DotaDataService {
             next_attempt_at asc,
             id asc
           limit ?
-        `
-      )
-      .all(...queryArgs) as Array<{ id: number; matchId: number; provider: EnrichmentProvider; attempts: number }>;
+        `;
+    let rows: Array<{ id: number; matchId: number; provider: EnrichmentProvider; attempts: number }>;
+    try {
+      rows = sqliteDb.prepare(queueSql).all(...queryArgs) as Array<{
+        id: number;
+        matchId: number;
+        provider: EnrichmentProvider;
+        attempts: number;
+      }>;
+    } catch (error) {
+      logger.error("Provider enrichment queue select failed", {
+        bypassConstraints,
+        provider: options?.provider ?? null,
+        limit,
+        queryArgs,
+        sql: queueSql,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
 
     const processed: Array<{ matchId: number; provider: EnrichmentProvider; status: EnrichmentStatus; message: string | null }> = [];
     let stratzBackoffUntil: number | null = null;
