@@ -1535,8 +1535,8 @@ export class DotaDataService {
         const message = overview.telemetryStatus.stratz.message;
         const nextAttempts = row.attempts + 1;
         if (!bypassConstraints && this.isStratzIpBindingError(message)) {
-          const nextAttemptAt = now + 24 * 60 * 60 * 1000;
-          const backoffMessage = "STRATZ key is bound to another IP address; cooling down STRATZ enrichment until the production key is fixed.";
+          const nextAttemptAt = now + 30 * 60 * 1000;
+          const backoffMessage = "STRATZ key is bound to another IP address; cooling down STRATZ enrichment for 30 minutes.";
           this.markProviderEnrichmentAttempt(row.id, "waiting", {
             nextAttemptAt,
             lastError: message
@@ -1557,8 +1557,8 @@ export class DotaDataService {
         const isRateLimit = message.includes("rate limit reached");
         const isStratzIpBindingError = row.provider === "stratz" && this.isStratzIpBindingError(message);
         if (!bypassConstraints && isStratzIpBindingError) {
-          const nextAttemptAt = now + 24 * 60 * 60 * 1000;
-          const backoffMessage = "STRATZ key is bound to another IP address; cooling down STRATZ enrichment until the production key is fixed.";
+          const nextAttemptAt = now + 30 * 60 * 1000;
+          const backoffMessage = "STRATZ key is bound to another IP address; cooling down STRATZ enrichment for 30 minutes.";
           this.markProviderEnrichmentAttempt(row.id, "waiting", {
             nextAttemptAt,
             lastError: message
