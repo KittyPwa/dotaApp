@@ -12,7 +12,11 @@ export interface StratzPlayerBasicResponse {
   player: { steamAccountId: number | null } | null;
 }
 
-interface StratzMatchPlayersResponse {
+export interface StratzMatchBasicResponse {
+  match: { id: number | null } | null;
+}
+
+export interface StratzMatchPlayersResponse {
   match: {
     players: Array<{
       playerSlot: number | null;
@@ -229,8 +233,22 @@ export class StratzAdapter {
     };
   }
 
-  async getMatchTelemetry(matchId: number): Promise<ProviderFetchResult<StratzMatchTelemetry>> {
-    const result = await this.execute<StratzMatchPlayersResponse>(
+  async getMatchBasic(matchId: number) {
+    return this.execute<StratzMatchBasicResponse>(
+      `
+        query MatchBasic($matchId: Long!) {
+          match(id: $matchId) {
+            id
+          }
+        }
+      `,
+      { matchId },
+      "MatchBasic"
+    );
+  }
+
+  async getMatchPlayersBasic(matchId: number) {
+    return this.execute<StratzMatchPlayersResponse>(
       `
         query MatchPlayers($matchId: Long!) {
           match(id: $matchId) {
@@ -244,6 +262,10 @@ export class StratzAdapter {
       { matchId },
       "MatchPlayers"
     );
+  }
+
+  async getMatchTelemetry(matchId: number): Promise<ProviderFetchResult<StratzMatchTelemetry>> {
+    const result = await this.getMatchPlayersBasic(matchId);
 
     if (result.payload.errors?.length) {
       throw new Error(result.payload.errors[0]?.message ?? "STRATZ match players query failed.");

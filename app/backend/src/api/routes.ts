@@ -547,6 +547,34 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/providers/stratz/match-basic-test/:matchId", { config: expensiveWriteRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    const params = z.object({ matchId: z.coerce.number().int().positive() }).parse(request.params);
+    try {
+      return await service.testStratzMatchBasic(params.matchId);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "STRATZ match basic test failed." };
+    }
+  });
+
+  app.get("/api/providers/stratz/match-players-test/:matchId", { config: expensiveWriteRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    const params = z.object({ matchId: z.coerce.number().int().positive() }).parse(request.params);
+    try {
+      return await service.testStratzMatchPlayers(params.matchId);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "STRATZ match players test failed." };
+    }
+  });
+
   app.get("/api/providers/steam/league-test/:leagueId", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);

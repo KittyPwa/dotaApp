@@ -4817,6 +4817,16 @@ export class DotaDataService {
     return adapter.getMatchTelemetry(matchId);
   }
 
+  async testStratzMatchBasic(matchId: number) {
+    const adapter = await this.createStratzAdapter();
+    return adapter.getMatchBasic(matchId);
+  }
+
+  async testStratzMatchPlayers(matchId: number) {
+    const adapter = await this.createStratzAdapter();
+    return adapter.getMatchPlayersBasic(matchId);
+  }
+
   async testSteamLeague(leagueId: number) {
     const adapter = await this.createValveAdapter();
     return adapter.getLeagueMatches(leagueId, 5);
