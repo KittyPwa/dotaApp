@@ -7,17 +7,26 @@ export interface ProviderRateLimits {
   perDay: number;
 }
 
+function getRateLimitWindowStarts(now: number) {
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+
+  return {
+    oneSecondAgo: now - 1000,
+    oneMinuteAgo: now - 60_000,
+    oneHourAgo: now - 3_600_000,
+    dayStart: dayStart.getTime()
+  };
+}
+
 export class ProviderRateLimitService {
   getUsage(provider: string) {
     const now = Date.now();
-    const oneSecondAgo = now - 1000;
-    const oneMinuteAgo = now - 60_000;
-    const oneHourAgo = now - 3_600_000;
-    const oneDayAgo = now - 86_400_000;
+    const { oneSecondAgo, oneMinuteAgo, oneHourAgo, dayStart } = getRateLimitWindowStarts(now);
 
     sqliteDb
       .prepare("delete from provider_request_events where provider = ? and requested_at < ?")
-      .run(provider, oneDayAgo);
+      .run(provider, dayStart);
 
     const counts = sqliteDb
       .prepare(
@@ -31,7 +40,7 @@ export class ProviderRateLimitService {
           where provider = ? and requested_at >= ?
         `
       )
-      .get(oneSecondAgo, oneMinuteAgo, oneHourAgo, provider, oneDayAgo) as {
+      .get(oneSecondAgo, oneMinuteAgo, oneHourAgo, provider, dayStart) as {
       secondCount: number | null;
       minuteCount: number | null;
       hourCount: number | null;
@@ -48,15 +57,12 @@ export class ProviderRateLimitService {
 
   consume(provider: string, limits: ProviderRateLimits) {
     const now = Date.now();
-    const oneSecondAgo = now - 1000;
-    const oneMinuteAgo = now - 60_000;
-    const oneHourAgo = now - 3_600_000;
-    const oneDayAgo = now - 86_400_000;
+    const { oneSecondAgo, oneMinuteAgo, oneHourAgo, dayStart } = getRateLimitWindowStarts(now);
 
     const transaction = sqliteDb.transaction(() => {
       sqliteDb
         .prepare("delete from provider_request_events where provider = ? and requested_at < ?")
-        .run(provider, oneDayAgo);
+        .run(provider, dayStart);
 
       const counts = sqliteDb
         .prepare(
@@ -70,7 +76,7 @@ export class ProviderRateLimitService {
             where provider = ? and requested_at >= ?
           `
         )
-        .get(oneSecondAgo, oneMinuteAgo, oneHourAgo, provider, oneDayAgo) as {
+        .get(oneSecondAgo, oneMinuteAgo, oneHourAgo, provider, dayStart) as {
         secondCount: number | null;
         minuteCount: number | null;
         hourCount: number | null;

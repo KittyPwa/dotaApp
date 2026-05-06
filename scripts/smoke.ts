@@ -1,11 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 
 const port = process.env.SMOKE_PORT ?? "3345";
 const baseUrl = `http://127.0.0.1:${port}`;
-const smokeDatabasePath = resolve(process.cwd(), "app/backend/.data", `smoke-${Date.now()}.sqlite`);
+const smokeDatabasePath = resolve(tmpdir(), "dota-local-analytics", `smoke-${Date.now()}.sqlite`);
 mkdirSync(dirname(smokeDatabasePath), { recursive: true });
 
 async function getJson(path: string, headers?: Record<string, string>) {
