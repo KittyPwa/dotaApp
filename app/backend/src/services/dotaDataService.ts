@@ -1389,6 +1389,28 @@ export class DotaDataService {
       .run(status, options?.nextAttemptAt ?? Date.now(), options?.lastError ?? null, Date.now(), id);
   }
 
+  private markProviderEnrichmentUnavailableAfterSingleCheck(
+    id: number,
+    options?: { nextAttemptAt?: number; lastError?: string | null }
+  ) {
+    const now = Date.now();
+    sqliteDb
+      .prepare(
+        `
+          update provider_enrichment_queue
+          set
+            status = 'unavailable',
+            attempts = 1,
+            last_attempt_at = ?,
+            next_attempt_at = ?,
+            last_error = ?,
+            updated_at = ?
+          where id = ?
+        `
+      )
+      .run(now, options?.nextAttemptAt ?? now, options?.lastError ?? null, now, id);
+  }
+
   private backoffProviderEnrichmentRows(provider: EnrichmentProvider, nextAttemptAt: number, lastError: string) {
     sqliteDb
       .prepare(
@@ -1648,7 +1670,7 @@ export class DotaDataService {
         if (!full && this.isStratzCleanEmptyTelemetry(message)) {
           const emptyMessage =
             "STRATZ responded for this match, but did not include extra timeline, item, or vision telemetry.";
-          this.markProviderEnrichmentAttempt(row.id, "unavailable", {
+          this.markProviderEnrichmentUnavailableAfterSingleCheck(row.id, {
             nextAttemptAt: now,
             lastError: emptyMessage
           });

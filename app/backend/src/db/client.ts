@@ -119,6 +119,15 @@ export function runMigrations() {
   ensureColumn("heroes", "icon_path", "text");
   ensureColumn("heroes", "portrait_path", "text");
   ensureColumn("items", "image_path", "text");
+
+  sqlite.exec(`
+    UPDATE provider_enrichment_queue
+    SET attempts = 1
+    WHERE provider = 'stratz'
+      AND status = 'unavailable'
+      AND attempts > 1
+      AND last_error LIKE 'STRATZ responded for this match, but did not include extra%';
+  `);
 }
 
 export function closeDb() {
