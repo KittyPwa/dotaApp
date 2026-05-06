@@ -981,7 +981,7 @@ export class DotaDataService {
               ? mergedFlags.timelines || mergedFlags.itemTimings || mergedFlags.vision
                 ? `STRATZ supplied additional telemetry for ${result.payload.players.length} players.`
                 : "STRATZ responded for this match, but did not include extra timeline or item telemetry."
-              : "STRATZ telemetry query ran, but no usable player telemetry was returned."
+              : `STRATZ telemetry query ran, but no usable player telemetry was returned. ${result.payload.diagnostics.discoveredSelections.join("; ")}`
         }
       };
     } catch (error) {

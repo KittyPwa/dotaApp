@@ -265,10 +265,23 @@ export class StratzAdapter {
   }
 
   async getMatchTelemetry(matchId: number): Promise<ProviderFetchResult<StratzMatchTelemetry>> {
-    const result = await this.getMatchPlayersBasic(matchId);
-
-    if (result.payload.errors?.length) {
-      throw new Error(result.payload.errors[0]?.message ?? "STRATZ match players query failed.");
+    let fetchedAt = Date.now();
+    const playersBySlot = new Map<number, { playerSlot: number | null; heroId: number | null }>();
+    let playersDiagnostic: string | null = null;
+    try {
+      const playersResult = await this.getMatchPlayersBasic(matchId);
+      fetchedAt = playersResult.fetchedAt;
+      if (playersResult.payload.errors?.length) {
+        playersDiagnostic = playersResult.payload.errors[0]?.message ?? "STRATZ match players query failed.";
+      } else {
+        for (const player of playersResult.payload.data?.match?.players ?? []) {
+          if (typeof player.playerSlot === "number") {
+            playersBySlot.set(player.playerSlot, player);
+          }
+        }
+      }
+    } catch (error) {
+      playersDiagnostic = error instanceof Error ? error.message : "STRATZ match players query failed.";
     }
 
     const timelineBySlot = new Map<number, NonNullable<NonNullable<StratzMatchTimelineTelemetryResponse["match"]>["players"]>[number]["stats"]>();
@@ -295,6 +308,7 @@ export class StratzAdapter {
         { matchId },
         "MatchPlayerTimelines"
       );
+      fetchedAt = timelineResult.fetchedAt;
       if (timelineResult.payload.errors?.length) {
         timelineDiagnostic = timelineResult.payload.errors[0]?.message ?? "STRATZ match timeline query failed.";
       } else {
@@ -330,6 +344,7 @@ export class StratzAdapter {
         { matchId },
         "MatchPlayerPurchases"
       );
+      fetchedAt = purchaseResult.fetchedAt;
       if (purchaseResult.payload.errors?.length) {
         purchaseDiagnostic = purchaseResult.payload.errors[0]?.message ?? "STRATZ match purchases query failed.";
       } else {
@@ -366,6 +381,7 @@ export class StratzAdapter {
         { matchId },
         "MatchWardTelemetry"
       );
+      fetchedAt = wardResult.fetchedAt;
       if (wardResult.payload.errors?.length) {
         wardDiagnostic = wardResult.payload.errors[0]?.message ?? "STRATZ ward telemetry query failed.";
       } else {
@@ -375,7 +391,6 @@ export class StratzAdapter {
       wardDiagnostic = error instanceof Error ? error.message : "STRATZ ward telemetry query failed.";
     }
 
-    const match = result.payload.data?.match;
     const filteredWardEvents = wardEvents.filter(
       (event) =>
         event &&
@@ -383,8 +398,17 @@ export class StratzAdapter {
         (event.action === "SPAWN" || event.action === "DESPAWN") &&
         (event.wardType === "OBSERVER" || event.wardType === "SENTRY")
     );
+    const playerSlots = new Set<number>([
+      ...playersBySlot.keys(),
+      ...timelineBySlot.keys(),
+      ...purchasesBySlot.keys(),
+      ...filteredWardEvents
+        .map((event) => event.fromPlayer)
+        .filter((playerSlot): playerSlot is number => typeof playerSlot === "number")
+    ]);
 
-    const players = (match?.players ?? []).map<StratzMatchTelemetryPlayer>((player) => {
+    const players = [...playerSlots].sort((left, right) => left - right).map<StratzMatchTelemetryPlayer>((playerSlot) => {
+      const player = playersBySlot.get(playerSlot) ?? { playerSlot, heroId: null };
       const timeline = typeof player.playerSlot === "number" ? timelineBySlot.get(player.playerSlot) : null;
       const purchases = typeof player.playerSlot === "number" ? purchasesBySlot.get(player.playerSlot) ?? [] : [];
       const playerWardEvents = filteredWardEvents.filter((event) => event.fromPlayer === player.playerSlot);
@@ -443,12 +467,12 @@ export class StratzAdapter {
     });
 
     return {
-      fetchedAt: result.fetchedAt,
+      fetchedAt,
       payload: {
         players,
         diagnostics: {
           discoveredSelections: [
-            "players",
+            ...(playersDiagnostic ? [`players unavailable: ${playersDiagnostic}`] : ["players"]),
             ...(timelineDiagnostic
               ? [`players.stats timelines unavailable: ${timelineDiagnostic}`]
               : [
