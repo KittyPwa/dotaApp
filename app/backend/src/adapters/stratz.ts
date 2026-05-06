@@ -16,7 +16,6 @@ interface StratzMatchPlayersResponse {
   match: {
     players: Array<{
       playerSlot: number | null;
-      steamAccountId: number | null;
       heroId: number | null;
     }> | null;
   } | null;
@@ -237,7 +236,6 @@ export class StratzAdapter {
           match(id: $matchId) {
             players {
               playerSlot
-              steamAccountId
               heroId
             }
           }
@@ -395,7 +393,7 @@ export class StratzAdapter {
 
       return {
         playerSlot: player.playerSlot,
-        playerId: player.steamAccountId,
+        playerId: null,
         heroId: player.heroId,
         goldTimeline: normalizeNumberArray(timeline?.goldPerMinute),
         xpTimeline: normalizeNumberArray(timeline?.experiencePerMinute),

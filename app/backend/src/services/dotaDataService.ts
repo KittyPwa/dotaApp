@@ -803,16 +803,19 @@ export class DotaDataService {
   ): MatchParticipant[] {
     if (stratzPlayers.length === 0) return participants;
 
+    const telemetryBySlot = new Map<number, StratzMatchTelemetryPlayer>();
     const telemetryByHeroId = new Map<number, StratzMatchTelemetryPlayer>();
     const telemetryByPlayerId = new Map<number, StratzMatchTelemetryPlayer>();
 
     for (const player of stratzPlayers) {
+      if (player.playerSlot !== null) telemetryBySlot.set(player.playerSlot, player);
       if (player.heroId !== null) telemetryByHeroId.set(player.heroId, player);
       if (player.playerId !== null) telemetryByPlayerId.set(player.playerId, player);
     }
 
     return participants.map((participant) => {
       const telemetry =
+        (participant.playerSlot !== null ? telemetryBySlot.get(participant.playerSlot) : undefined) ??
         (participant.playerId !== null ? telemetryByPlayerId.get(participant.playerId) : undefined) ??
         (participant.heroId !== null ? telemetryByHeroId.get(participant.heroId) : undefined);
 
