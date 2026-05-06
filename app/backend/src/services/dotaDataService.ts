@@ -1349,6 +1349,14 @@ export class DotaDataService {
     return (message ?? "").toLowerCase().includes("cannot use different ip addresses");
   }
 
+  private isStratzCleanEmptyTelemetry(message: string | null | undefined) {
+    const normalized = (message ?? "").toLowerCase();
+    return (
+      normalized.includes("stratz responded for this match") &&
+      normalized.includes("did not include extra timeline or item telemetry")
+    );
+  }
+
   private getProviderQuotaHoldUntil(provider: "stratz" | "opendota") {
     const snapshot = this.rateLimitService.getQuotaSnapshot(provider);
     if (!snapshot || snapshot.remaining === null || snapshot.remaining > 0) return null;
@@ -1573,6 +1581,16 @@ export class DotaDataService {
           });
           this.backoffProviderEnrichmentRows("stratz", nextAttemptAt, backoffMessage);
           processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
+          continue;
+        }
+        if (!full && !bypassConstraints && this.isStratzCleanEmptyTelemetry(message)) {
+          const emptyMessage =
+            "STRATZ responded for this match, but did not include extra timeline, item, or vision telemetry.";
+          this.markProviderEnrichmentAttempt(row.id, "unavailable", {
+            nextAttemptAt: now,
+            lastError: emptyMessage
+          });
+          processed.push({ matchId: row.matchId, provider: row.provider, status: "unavailable", message: emptyMessage });
           continue;
         }
         const status = full ? "full" : !bypassConstraints && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "waiting";

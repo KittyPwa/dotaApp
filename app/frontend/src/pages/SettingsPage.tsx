@@ -827,6 +827,17 @@ export function SettingsPage() {
                               <tbody>
                                 {providerEnrichment.data.providerUsage.map((entry) => {
                                   const quota = entry.upstreamQuota;
+                                  const formatWindowCell = (
+                                    window: "second" | "minute" | "hour" | "day",
+                                    localUsage: number,
+                                    localLimit: number
+                                  ) => {
+                                    const bucket = quota?.buckets[window];
+                                    if (bucket && (bucket.remaining !== null || bucket.limit !== null)) {
+                                      return `${bucket.remaining ?? "?"} remaining / ${bucket.limit ?? "?"}`;
+                                    }
+                                    return `${localUsage} / ${localLimit}`;
+                                  };
                                   const quotaLabel = quota
                                     ? `${quota.remaining ?? "?"} remaining${quota.limit !== null ? ` / ${quota.limit}` : ""}`
                                     : "No provider header";
@@ -836,10 +847,10 @@ export function SettingsPage() {
                                   return (
                                     <tr key={entry.provider}>
                                       <td>{entry.provider}</td>
-                                      <td>{entry.usage.second} / {entry.limits.perSecond}</td>
-                                      <td>{entry.usage.minute} / {entry.limits.perMinute}</td>
-                                      <td>{entry.usage.hour} / {entry.limits.perHour}</td>
-                                      <td>{entry.usage.day} / {entry.limits.perDay}</td>
+                                      <td>{formatWindowCell("second", entry.usage.second, entry.limits.perSecond)}</td>
+                                      <td>{formatWindowCell("minute", entry.usage.minute, entry.limits.perMinute)}</td>
+                                      <td>{formatWindowCell("hour", entry.usage.hour, entry.limits.perHour)}</td>
+                                      <td>{formatWindowCell("day", entry.usage.day, entry.limits.perDay)}</td>
                                       <td>
                                         <span>{quotaLabel}</span>
                                         {bucketLabel ? <span className="muted-inline"> ({bucketLabel})</span> : null}

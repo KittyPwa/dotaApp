@@ -49,6 +49,23 @@ function parseQuotaBucket(headers: Headers, window: "second" | "minute" | "hour"
   return limit === null && remaining === null ? null : { limit, remaining };
 }
 
+function parseQuotaBucketsJson(value: string | null | undefined) {
+  if (!value) return { second: null, minute: null, hour: null, day: null };
+  try {
+    const parsed = JSON.parse(value) as Partial<
+      Record<"second" | "minute" | "hour" | "day", { limit: number | null; remaining: number | null } | null>
+    >;
+    return {
+      second: parsed.second ?? null,
+      minute: parsed.minute ?? null,
+      hour: parsed.hour ?? null,
+      day: parsed.day ?? null
+    };
+  } catch {
+    return { second: null, minute: null, hour: null, day: null };
+  }
+}
+
 export class ProviderRateLimitService {
   getUsage(provider: string) {
     const now = Date.now();
@@ -117,11 +134,45 @@ export class ProviderRateLimitService {
       const minuteCount = counts.minuteCount ?? 0;
       const hourCount = counts.hourCount ?? 0;
       const dayCount = counts.dayCount ?? 0;
+      const quotaSnapshot = this.getQuotaSnapshot(provider);
+      const quotaBuckets = parseQuotaBucketsJson(quotaSnapshot?.bucketsJson);
+      const providerReportedRemaining = {
+        second: quotaBuckets.second?.remaining ?? null,
+        minute: quotaBuckets.minute?.remaining ?? null,
+        hour: quotaBuckets.hour?.remaining ?? null,
+        day: quotaBuckets.day?.remaining ?? quotaSnapshot?.remaining ?? null
+      };
+      const providerReportedLimits = {
+        second: quotaBuckets.second?.limit ?? null,
+        minute: quotaBuckets.minute?.limit ?? null,
+        hour: quotaBuckets.hour?.limit ?? null,
+        day: quotaBuckets.day?.limit ?? quotaSnapshot?.quotaLimit ?? null
+      };
 
-      if (secondCount >= limits.perSecond) throw new Error(`${provider} rate limit reached: ${limits.perSecond}/second.`);
-      if (minuteCount >= limits.perMinute) throw new Error(`${provider} rate limit reached: ${limits.perMinute}/minute.`);
-      if (hourCount >= limits.perHour) throw new Error(`${provider} rate limit reached: ${limits.perHour}/hour.`);
-      if (dayCount >= limits.perDay) throw new Error(`${provider} rate limit reached: ${limits.perDay}/day.`);
+      if (providerReportedRemaining.second !== null && providerReportedRemaining.second <= 0) {
+        throw new Error(`${provider} provider quota reached: 0 requests remaining/second.`);
+      }
+      if (providerReportedRemaining.minute !== null && providerReportedRemaining.minute <= 0) {
+        throw new Error(`${provider} provider quota reached: 0 requests remaining/minute.`);
+      }
+      if (providerReportedRemaining.hour !== null && providerReportedRemaining.hour <= 0) {
+        throw new Error(`${provider} provider quota reached: 0 requests remaining/hour.`);
+      }
+      if (providerReportedRemaining.day !== null && providerReportedRemaining.day <= 0) {
+        throw new Error(`${provider} provider quota reached: 0 requests remaining/day.`);
+      }
+
+      const effectiveLimits = {
+        perSecond: providerReportedLimits.second ?? limits.perSecond,
+        perMinute: providerReportedLimits.minute ?? limits.perMinute,
+        perHour: providerReportedLimits.hour ?? limits.perHour,
+        perDay: providerReportedLimits.day ?? limits.perDay
+      };
+
+      if (secondCount >= effectiveLimits.perSecond) throw new Error(`${provider} rate limit reached: ${effectiveLimits.perSecond}/second.`);
+      if (minuteCount >= effectiveLimits.perMinute) throw new Error(`${provider} rate limit reached: ${effectiveLimits.perMinute}/minute.`);
+      if (hourCount >= effectiveLimits.perHour) throw new Error(`${provider} rate limit reached: ${effectiveLimits.perHour}/hour.`);
+      if (dayCount >= effectiveLimits.perDay) throw new Error(`${provider} rate limit reached: ${effectiveLimits.perDay}/day.`);
 
       sqliteDb
         .prepare("insert into provider_request_events (provider, requested_at) values (?, ?)")
