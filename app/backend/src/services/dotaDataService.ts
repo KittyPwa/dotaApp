@@ -1241,14 +1241,48 @@ export class DotaDataService {
     const now = Date.now();
     const openDotaReplayWindowMs = 10 * 24 * 60 * 60 * 1000;
     const candidateSql = `
-          select id, start_time as startTime
-          from matches
-          order by coalesce(start_time, 0) desc
+          select distinct id, startTime
+          from (
+            ${
+              includeStratz
+                ? `
+            select m.id, m.start_time as startTime
+            from matches m
+            where not exists (
+              select 1
+              from provider_enrichment_queue q
+              where q.match_id = m.id
+                and q.provider = 'stratz'
+                and q.status in ('full', 'unavailable', 'expired')
+            )
+            `
+                : `
+            select m.id, m.start_time as startTime
+            from matches m
+            where 0
+            `
+            }
+            union
+            select m.id, m.start_time as startTime
+            from matches m
+            where m.start_time >= ?
+              and not exists (
+                select 1
+                from provider_enrichment_queue q
+                where q.match_id = m.id
+                  and q.provider = 'opendota_parse'
+                  and q.status in ('full', 'unavailable', 'expired')
+              )
+          )
+          order by coalesce(startTime, 0) desc
           limit ?
         `;
     let rows: Array<{ id: number; startTime: number | null }>;
     try {
-      rows = sqliteDb.prepare(candidateSql).all(limit) as Array<{ id: number; startTime: number | null }>;
+      rows = sqliteDb.prepare(candidateSql).all(now - openDotaReplayWindowMs, limit) as Array<{
+        id: number;
+        startTime: number | null;
+      }>;
     } catch (error) {
       logger.error("Provider enrichment candidate query failed", {
         limit,
@@ -1267,13 +1301,41 @@ export class DotaDataService {
 
     for (const row of rows) {
       if (includeStratz) {
-        this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
-        stratzQueued += 1;
+        const existingStratzTerminal = sqliteDb
+          .prepare(
+            `
+              select 1
+              from provider_enrichment_queue
+              where match_id = ?
+                and provider = 'stratz'
+                and status in ('full', 'unavailable', 'expired')
+              limit 1
+            `
+          )
+          .get(row.id);
+        if (!existingStratzTerminal) {
+          this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
+          stratzQueued += 1;
+        }
       }
 
       if (row.startTime && row.startTime >= now - openDotaReplayWindowMs) {
-        this.upsertEnrichmentQueueEntry(row.id, "opendota_parse", now);
-        openDotaParseQueued += 1;
+        const existingOpenDotaTerminal = sqliteDb
+          .prepare(
+            `
+              select 1
+              from provider_enrichment_queue
+              where match_id = ?
+                and provider = 'opendota_parse'
+                and status in ('full', 'unavailable', 'expired')
+              limit 1
+            `
+          )
+          .get(row.id);
+        if (!existingOpenDotaTerminal) {
+          this.upsertEnrichmentQueueEntry(row.id, "opendota_parse", now);
+          openDotaParseQueued += 1;
+        }
       }
     }
 
@@ -1375,7 +1437,7 @@ export class DotaDataService {
     const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
     const now = Date.now();
     const settings = await this.settingsService.getSettings({ includeProtected: true });
-    const statusFilter = bypassConstraints ? "'queued', 'failed', 'waiting', 'unavailable'" : "'queued', 'failed', 'waiting'";
+    const statusFilter = "'queued', 'failed', 'waiting'";
     const dueFilter = bypassConstraints ? "" : "and next_attempt_at <= ?";
     const providerFilter = options?.provider ? "and provider = ?" : "";
     const queryArgs = bypassConstraints
@@ -1583,7 +1645,7 @@ export class DotaDataService {
           processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
           continue;
         }
-        if (!full && !bypassConstraints && this.isStratzCleanEmptyTelemetry(message)) {
+        if (!full && this.isStratzCleanEmptyTelemetry(message)) {
           const emptyMessage =
             "STRATZ responded for this match, but did not include extra timeline, item, or vision telemetry.";
           this.markProviderEnrichmentAttempt(row.id, "unavailable", {
