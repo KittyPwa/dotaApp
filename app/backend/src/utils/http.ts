@@ -14,14 +14,28 @@ export class UpstreamHttpError extends Error {
 export async function fetchJsonWithRetry<T>(
   input: RequestInfo | URL,
   init: RequestInit,
-  options: { retries?: number; provider: string; operation?: string }
+  options: { retries?: number; provider: string; operation?: string; context?: Record<string, unknown> }
 ): Promise<T> {
   const retries = options.retries ?? 2;
   let attempt = 0;
   let delayMs = 500;
+  const startedAt = Date.now();
 
   while (attempt <= retries) {
-    const response = await fetch(input, init);
+    let response: Response;
+    try {
+      response = await fetch(input, init);
+    } catch (error) {
+      logger.error("Upstream request network failure", {
+        provider: options.provider,
+        operation: options.operation ?? null,
+        context: options.context ?? null,
+        attempt,
+        elapsedMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
 
     if (response.ok) {
       return (await response.json()) as T;
@@ -36,14 +50,36 @@ export async function fetchJsonWithRetry<T>(
     const message = isCloudflareChallenge
       ? "Upstream request was blocked by Cloudflare (403). This environment may not be allowed to access the provider API directly."
       : `Upstream request failed with status ${response.status}${bodySnippet ? `: ${bodySnippet}` : ""}`;
+    const responseHeaders = Object.fromEntries(
+      [...response.headers.entries()].filter(([key]) =>
+        [
+          "age",
+          "cf-cache-status",
+          "cf-ray",
+          "content-type",
+          "date",
+          "retry-after",
+          "server",
+          "x-cache",
+          "x-ratelimit-limit",
+          "x-ratelimit-remaining",
+          "x-ratelimit-reset"
+        ].includes(key.toLowerCase())
+      )
+    );
+    const logPayload = {
+      provider: options.provider,
+      operation: options.operation ?? null,
+      context: options.context ?? null,
+      statusCode: response.status,
+      attempt,
+      elapsedMs: Date.now() - startedAt,
+      headers: responseHeaders,
+      bodySnippet
+    };
 
     if (!retryable || attempt === retries) {
-      logger.error("Upstream request failed", {
-        provider: options.provider,
-        operation: options.operation ?? null,
-        statusCode: response.status,
-        body
-      });
+      logger.error("Upstream request failed", logPayload);
       throw new UpstreamHttpError(
         message,
         response.status,
@@ -52,12 +88,7 @@ export async function fetchJsonWithRetry<T>(
       );
     }
 
-    logger.warn("Retrying upstream request", {
-      provider: options.provider,
-      operation: options.operation ?? null,
-      statusCode: response.status,
-      attempt
-    });
+    logger.warn("Retrying upstream request", logPayload);
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     delayMs *= 2;

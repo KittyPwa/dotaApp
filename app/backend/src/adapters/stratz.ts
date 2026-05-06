@@ -171,7 +171,7 @@ export class StratzAdapter {
         },
         body: JSON.stringify({ query, variables, operationName: operation })
       },
-      { provider: "stratz", operation }
+      { provider: "stratz", operation, context: variables }
     );
     return { payload, fetchedAt };
   }
