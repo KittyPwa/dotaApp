@@ -1595,7 +1595,9 @@ export class DotaDataService {
   }
 
   private labelParsedData(flags: Omit<MatchParsedData, "label">): string {
-    return flags.timelines && flags.itemTimings && flags.vision ? "Full" : "Basic";
+    if (flags.timelines && flags.itemTimings && flags.vision) return "Full";
+    if (flags.hasFullMatchPayload || flags.timelines || flags.itemTimings || flags.vision) return "Provider partial";
+    return "Basic";
   }
 
   private async getMatchParsedDataMap(matchIds: number[]) {

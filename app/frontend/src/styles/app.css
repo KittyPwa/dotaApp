@@ -2817,6 +2817,12 @@ button.compact {
   border-color: rgba(39, 174, 96, 0.28);
 }
 
+.parsed-data-pill.partial {
+  background: rgba(245, 158, 11, 0.14);
+  color: #f6c76a;
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
 .parsed-data-pill.basic {
   background: rgba(108, 117, 125, 0.12);
   color: var(--muted);

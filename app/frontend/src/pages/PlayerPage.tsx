@@ -680,7 +680,9 @@ export function PlayerPage() {
                   sortable: true,
                   cell: (match) => (
                     <span
-                      className={`parsed-data-pill ${match.parsedData.label === "Full" ? "rich" : "basic"}`}
+                      className={`parsed-data-pill ${
+                        match.parsedData.label === "Full" ? "rich" : match.parsedData.label === "Provider partial" ? "partial" : "basic"
+                      }`}
                       title={[
                         match.parsedData.hasFullMatchPayload ? "Full match payload" : "No full match payload",
                         match.parsedData.timelines ? "Timelines" : null,
