@@ -229,6 +229,17 @@ export const providerRequestEvents = sqliteTable(
   })
 );
 
+export const providerQuotaSnapshots = sqliteTable("provider_quota_snapshots", {
+  provider: text("provider").primaryKey(),
+  observedAt: integer("observed_at", { mode: "timestamp_ms" }).notNull(),
+  statusCode: integer("status_code"),
+  limit: integer("limit"),
+  remaining: integer("remaining"),
+  resetAt: integer("reset_at", { mode: "timestamp_ms" }),
+  retryAfterSeconds: integer("retry_after_seconds"),
+  rawHeadersJson: text("raw_headers_json")
+});
+
 export const providerEnrichmentQueue = sqliteTable(
   "provider_enrichment_queue",
   {
@@ -266,5 +277,6 @@ export const schema = {
   rawApiPayloads,
   settings,
   providerRequestEvents,
+  providerQuotaSnapshots,
   providerEnrichmentQueue
 };

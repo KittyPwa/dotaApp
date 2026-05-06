@@ -19,6 +19,22 @@ function getRateLimitWindowStarts(now: number) {
   };
 }
 
+function parseIntegerHeader(headers: Headers, names: string[]) {
+  for (const name of names) {
+    const value = headers.get(name);
+    if (!value) continue;
+    const firstValue = value.split(",")[0]?.trim();
+    const parsed = Number(firstValue);
+    if (Number.isFinite(parsed)) return Math.floor(parsed);
+  }
+  return null;
+}
+
+function normalizeResetAt(value: number | null) {
+  if (value === null) return null;
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
 export class ProviderRateLimitService {
   getUsage(provider: string) {
     const now = Date.now();
@@ -99,5 +115,92 @@ export class ProviderRateLimitService {
     });
 
     transaction();
+  }
+
+  recordQuotaSnapshot(provider: string, headers: Headers, statusCode: number) {
+    const rawHeaders = Object.fromEntries(
+      [...headers.entries()].filter(([key]) => {
+        const normalized = key.toLowerCase();
+        return (
+          normalized.includes("ratelimit") ||
+          normalized.includes("rate-limit") ||
+          normalized === "retry-after" ||
+          normalized.includes("calls") ||
+          normalized.includes("quota")
+        );
+      })
+    );
+    const limit = parseIntegerHeader(headers, ["x-ratelimit-limit", "x-rate-limit-limit", "ratelimit-limit"]);
+    const remaining = parseIntegerHeader(headers, [
+      "x-ratelimit-remaining",
+      "x-rate-limit-remaining",
+      "ratelimit-remaining",
+      "x-calls-remaining",
+      "calls-remaining",
+      "x-quota-remaining"
+    ]);
+    const resetAt = normalizeResetAt(parseIntegerHeader(headers, ["x-ratelimit-reset", "x-rate-limit-reset", "ratelimit-reset"]));
+    const retryAfterSeconds = parseIntegerHeader(headers, ["retry-after"]);
+
+    if (Object.keys(rawHeaders).length === 0 && limit === null && remaining === null && resetAt === null && retryAfterSeconds === null) {
+      return;
+    }
+
+    sqliteDb
+      .prepare(
+        `
+          insert into provider_quota_snapshots (
+            provider,
+            observed_at,
+            status_code,
+            limit,
+            remaining,
+            reset_at,
+            retry_after_seconds,
+            raw_headers_json
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(provider) do update set
+            observed_at = excluded.observed_at,
+            status_code = excluded.status_code,
+            limit = excluded.limit,
+            remaining = excluded.remaining,
+            reset_at = excluded.reset_at,
+            retry_after_seconds = excluded.retry_after_seconds,
+            raw_headers_json = excluded.raw_headers_json
+        `
+      )
+      .run(provider, Date.now(), statusCode, limit, remaining, resetAt, retryAfterSeconds, JSON.stringify(rawHeaders));
+  }
+
+  getQuotaSnapshot(provider: string) {
+    return sqliteDb
+      .prepare(
+        `
+          select
+            provider,
+            observed_at as observedAt,
+            status_code as statusCode,
+            limit,
+            remaining,
+            reset_at as resetAt,
+            retry_after_seconds as retryAfterSeconds,
+            raw_headers_json as rawHeadersJson
+          from provider_quota_snapshots
+          where provider = ?
+        `
+      )
+      .get(provider) as
+      | {
+          provider: string;
+          observedAt: number;
+          statusCode: number | null;
+          limit: number | null;
+          remaining: number | null;
+          resetAt: number | null;
+          retryAfterSeconds: number | null;
+          rawHeadersJson: string | null;
+        }
+      | undefined;
   }
 }

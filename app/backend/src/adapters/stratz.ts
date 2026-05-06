@@ -185,7 +185,12 @@ export class StratzAdapter {
         },
         body: JSON.stringify({ query, variables, operationName: operation })
       },
-      { provider: "stratz", operation, context: variables }
+      {
+        provider: "stratz",
+        operation,
+        context: variables,
+        onResponseHeaders: (headers, statusCode) => this.rateLimitService.recordQuotaSnapshot("stratz", headers, statusCode)
+      }
     );
     return { payload, fetchedAt };
   }

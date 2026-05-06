@@ -1133,6 +1133,20 @@ export class DotaDataService {
     }));
 
     const settings = await this.settingsService.getSettings({ includeProtected: true });
+    const quotaSnapshot = (provider: "stratz" | "opendota") => {
+      const snapshot = this.rateLimitService.getQuotaSnapshot(provider);
+      return snapshot
+        ? {
+            observedAt: snapshot.observedAt,
+            statusCode: snapshot.statusCode,
+            limit: snapshot.limit,
+            remaining: snapshot.remaining,
+            resetAt: snapshot.resetAt,
+            retryAfterSeconds: snapshot.retryAfterSeconds,
+            rawHeaders: parseJsonValue<Record<string, string>>(snapshot.rawHeadersJson, {})
+          }
+        : null;
+    };
     const providerUsage = [
       {
         provider: "stratz" as const,
@@ -1142,7 +1156,8 @@ export class DotaDataService {
           perMinute: settings.stratzPerMinuteCap,
           perHour: settings.stratzPerHourCap,
           perDay: settings.stratzDailyRequestCap
-        }
+        },
+        upstreamQuota: quotaSnapshot("stratz")
       },
       {
         provider: "opendota" as const,
@@ -1152,7 +1167,8 @@ export class DotaDataService {
           perMinute: settings.openDotaPerMinuteCap,
           perHour: settings.openDotaPerHourCap,
           perDay: settings.openDotaDailyRequestCap
-        }
+        },
+        upstreamQuota: quotaSnapshot("opendota")
       },
       {
         provider: "steam" as const,
@@ -1162,7 +1178,8 @@ export class DotaDataService {
           perMinute: settings.steamPerMinuteCap,
           perHour: settings.steamPerHourCap,
           perDay: settings.steamDailyRequestCap
-        }
+        },
+        upstreamQuota: null
       },
       {
         provider: "enrichment" as const,
@@ -1172,7 +1189,8 @@ export class DotaDataService {
           perMinute: 10000,
           perHour: 100000,
           perDay: settings.providerEnrichmentDailyRequestCap
-        }
+        },
+        upstreamQuota: null
       }
     ];
 
@@ -1316,6 +1334,19 @@ export class DotaDataService {
     return (message ?? "").toLowerCase().includes("cannot use different ip addresses");
   }
 
+  private getProviderQuotaHoldUntil(provider: "stratz" | "opendota") {
+    const snapshot = this.rateLimitService.getQuotaSnapshot(provider);
+    if (!snapshot || snapshot.remaining === null || snapshot.remaining > 0) return null;
+    const now = Date.now();
+    if (snapshot.retryAfterSeconds !== null && snapshot.retryAfterSeconds > 0) {
+      return now + snapshot.retryAfterSeconds * 1000;
+    }
+    if (snapshot.resetAt !== null && snapshot.resetAt > now) {
+      return snapshot.resetAt;
+    }
+    return now + 60 * 60 * 1000;
+  }
+
   async processProviderEnrichmentQueue(options?: { limit?: number; bypassConstraints?: boolean; provider?: EnrichmentProvider }) {
     const bypassConstraints = options?.bypassConstraints ?? false;
     const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
@@ -1404,6 +1435,19 @@ export class DotaDataService {
           const message = "STRATZ match API is cooling down after an upstream 500.";
           this.markProviderEnrichmentStatus(row.id, "waiting", {
             nextAttemptAt: stratzBackoffUntil,
+            lastError: message
+          });
+          processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
+          continue;
+        }
+        const providerQuotaHoldUntil = !bypassConstraints
+          ? this.getProviderQuotaHoldUntil(row.provider === "stratz" ? "stratz" : "opendota")
+          : null;
+        if (providerQuotaHoldUntil !== null && providerQuotaHoldUntil > now) {
+          const providerLabel = row.provider === "stratz" ? "STRATZ" : "OpenDota";
+          const message = `${providerLabel} provider reports no remaining requests; waiting until ${new Date(providerQuotaHoldUntil).toISOString()}.`;
+          this.markProviderEnrichmentStatus(row.id, "waiting", {
+            nextAttemptAt: providerQuotaHoldUntil,
             lastError: message
           });
           processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });

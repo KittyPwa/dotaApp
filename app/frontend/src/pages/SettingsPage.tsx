@@ -69,6 +69,10 @@ function parseSavedLeagueLine(value: string) {
   return parseSavedLeagueLines(value)[0] ?? null;
 }
 
+function formatProviderDateTime(value: number) {
+  return new Date(value).toLocaleString();
+}
+
 export function SettingsPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -814,24 +818,37 @@ export function SettingsPage() {
                               <tr>
                                 <th>Provider</th>
                                 <th>Second</th>
-                                <th>Minute</th>
-                                <th>Hour</th>
-                                <th>Day</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {providerEnrichment.data.providerUsage.map((entry) => (
-                                <tr key={entry.provider}>
-                                  <td>{entry.provider}</td>
-                                  <td>{entry.usage.second} / {entry.limits.perSecond}</td>
-                                  <td>{entry.usage.minute} / {entry.limits.perMinute}</td>
-                                  <td>{entry.usage.hour} / {entry.limits.perHour}</td>
-                                  <td>{entry.usage.day} / {entry.limits.perDay}</td>
+                                  <th>Minute</th>
+                                  <th>Hour</th>
+                                  <th>Day</th>
+                                  <th>Provider reported</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                              </thead>
+                              <tbody>
+                                {providerEnrichment.data.providerUsage.map((entry) => {
+                                  const quota = entry.upstreamQuota;
+                                  const quotaLabel = quota
+                                    ? `${quota.remaining ?? "?"} remaining${quota.limit !== null ? ` / ${quota.limit}` : ""}`
+                                    : "No provider header";
+                                  return (
+                                    <tr key={entry.provider}>
+                                      <td>{entry.provider}</td>
+                                      <td>{entry.usage.second} / {entry.limits.perSecond}</td>
+                                      <td>{entry.usage.minute} / {entry.limits.perMinute}</td>
+                                      <td>{entry.usage.hour} / {entry.limits.perHour}</td>
+                                      <td>{entry.usage.day} / {entry.limits.perDay}</td>
+                                      <td>
+                                        <span>{quotaLabel}</span>
+                                        {quota?.resetAt ? (
+                                          <span className="muted-inline"> reset {formatProviderDateTime(quota.resetAt)}</span>
+                                        ) : null}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                       </div>
                       <div className="provider-enriched-list">
                         <h3>Recently enriched matches</h3>

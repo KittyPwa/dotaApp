@@ -25,6 +25,15 @@ export type ProviderEnrichmentSummary = {
     provider: "stratz" | "opendota" | "steam" | "enrichment";
     usage: { second: number; minute: number; hour: number; day: number };
     limits: { perSecond: number; perMinute: number; perHour: number; perDay: number };
+    upstreamQuota: {
+      observedAt: number;
+      statusCode: number | null;
+      limit: number | null;
+      remaining: number | null;
+      resetAt: number | null;
+      retryAfterSeconds: number | null;
+      rawHeaders: Record<string, string>;
+    } | null;
   }>;
   worker: {
     enabled: boolean;

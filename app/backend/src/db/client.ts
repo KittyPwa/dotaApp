@@ -53,6 +53,16 @@ export function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS provider_request_events_provider_requested_at_idx
       ON provider_request_events(provider, requested_at);
+    CREATE TABLE IF NOT EXISTS provider_quota_snapshots (
+      provider text primary key,
+      observed_at integer not null,
+      status_code integer,
+      limit integer,
+      remaining integer,
+      reset_at integer,
+      retry_after_seconds integer,
+      raw_headers_json text
+    );
     CREATE TABLE IF NOT EXISTS draft_plans (
       id text primary key,
       owner_key text not null,

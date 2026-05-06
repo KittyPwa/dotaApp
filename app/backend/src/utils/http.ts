@@ -14,7 +14,13 @@ export class UpstreamHttpError extends Error {
 export async function fetchJsonWithRetry<T>(
   input: RequestInfo | URL,
   init: RequestInit,
-  options: { retries?: number; provider: string; operation?: string; context?: Record<string, unknown> }
+  options: {
+    retries?: number;
+    provider: string;
+    operation?: string;
+    context?: Record<string, unknown>;
+    onResponseHeaders?: (headers: Headers, statusCode: number) => void;
+  }
 ): Promise<T> {
   const retries = options.retries ?? 2;
   let attempt = 0;
@@ -35,6 +41,16 @@ export async function fetchJsonWithRetry<T>(
         error: error instanceof Error ? error.message : String(error)
       });
       throw error;
+    }
+
+    try {
+      options.onResponseHeaders?.(response.headers, response.status);
+    } catch (error) {
+      logger.warn("Failed to record upstream response headers", {
+        provider: options.provider,
+        operation: options.operation ?? null,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
 
     if (response.ok) {

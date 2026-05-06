@@ -190,7 +190,10 @@ export class OpenDotaAdapter {
       perHour: settings.openDotaPerHourCap,
       perDay: settings.openDotaDailyRequestCap
     });
-    return fetchJsonWithRetry<T>(input, init, { provider: "opendota" });
+    return fetchJsonWithRetry<T>(input, init, {
+      provider: "opendota",
+      onResponseHeaders: (headers, statusCode) => this.rateLimitService.recordQuotaSnapshot("opendota", headers, statusCode)
+    });
   }
 
   async getPlayerProfile(playerId: number): Promise<ProviderFetchResult<OpenDotaPlayerProfileResponse>> {
