@@ -94,8 +94,7 @@ export class ProviderEnrichmentWorker {
       };
 
       const queued = await this.dataService.enqueueProviderEnrichmentCandidates({
-        limit: settings.providerEnrichmentWorkerScanLimit,
-        includeStratz: false
+        limit: settings.providerEnrichmentWorkerScanLimit
       });
       const processed = await this.dataService.processProviderEnrichmentQueue({
         limit: settings.providerEnrichmentWorkerJobsPerRun
