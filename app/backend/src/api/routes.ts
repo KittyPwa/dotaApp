@@ -419,6 +419,19 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/provider-enrichment/process-override", { config: expensiveWriteRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    try {
+      return await service.processProviderEnrichmentQueue({ limit: 1, bypassConstraints: true });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to process provider enrichment override." };
+    }
+  });
+
   app.get("/api/settings", async (request) =>
     service.getSettings({
       adminUnlocked: await isAdminRequest(request),

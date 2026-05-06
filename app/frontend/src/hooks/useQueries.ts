@@ -304,6 +304,21 @@ export function useProcessProviderEnrichment() {
   });
 }
 
+export function useProcessProviderEnrichmentOverride() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => apiPost<ProviderEnrichmentProcessResponse>("/api/provider-enrichment/process-override", {}),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["provider-enrichment"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["hero-stats"] });
+      await queryClient.invalidateQueries({ queryKey: ["player"] });
+      await queryClient.invalidateQueries({ queryKey: ["match"] });
+    }
+  });
+}
+
 export function useSaveSettings() {
   const queryClient = useQueryClient();
 

@@ -1268,17 +1268,21 @@ export class DotaDataService {
       .run(status, Date.now(), options?.nextAttemptAt ?? Date.now(), options?.lastError ?? null, Date.now(), id);
   }
 
-  async processProviderEnrichmentQueue(options?: { limit?: number }) {
-    const limit = Math.min(Math.max(options?.limit ?? 5, 1), 25);
+  async processProviderEnrichmentQueue(options?: { limit?: number; bypassConstraints?: boolean }) {
+    const bypassConstraints = options?.bypassConstraints ?? false;
+    const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
     const now = Date.now();
     const settings = await this.settingsService.getSettings({ includeProtected: true });
+    const statusFilter = bypassConstraints ? "'queued', 'failed', 'waiting', 'unavailable'" : "'queued', 'failed', 'waiting'";
+    const dueFilter = bypassConstraints ? "" : "and next_attempt_at <= ?";
+    const queryArgs = bypassConstraints ? [limit] : [now, limit];
     const rows = sqliteDb
       .prepare(
         `
           select id, match_id as matchId, provider, attempts
           from provider_enrichment_queue
-          where status in ('queued', 'failed', 'waiting')
-            and next_attempt_at <= ?
+          where status in (${statusFilter})
+            ${dueFilter}
           order by
             case provider
               when 'opendota_parse' then 0
@@ -1289,18 +1293,20 @@ export class DotaDataService {
           limit ?
         `
       )
-      .all(now, limit) as Array<{ id: number; matchId: number; provider: EnrichmentProvider; attempts: number }>;
+      .all(...queryArgs) as Array<{ id: number; matchId: number; provider: EnrichmentProvider; attempts: number }>;
 
     const processed: Array<{ matchId: number; provider: EnrichmentProvider; status: EnrichmentStatus; message: string | null }> = [];
 
     for (const row of rows) {
       try {
-        this.rateLimitService.consume("provider_enrichment", {
-          perSecond: 1000,
-          perMinute: 10000,
-          perHour: 100000,
-          perDay: settings.providerEnrichmentDailyRequestCap
-        });
+        if (!bypassConstraints) {
+          this.rateLimitService.consume("provider_enrichment", {
+            perSecond: 1000,
+            perMinute: 10000,
+            perHour: 100000,
+            perDay: settings.providerEnrichmentDailyRequestCap
+          });
+        }
 
         if (row.provider === "opendota_parse") {
           const adapter = await this.createOpenDotaAdapter();
@@ -1342,7 +1348,7 @@ export class DotaDataService {
           const message = `OpenDota match fetched (${parsedData?.label ?? "Basic"}); ${parseMessage}`;
           const nextAttempts = row.attempts + 1;
           const status = result.payload.error
-            ? nextAttempts >= settings.providerEnrichmentMaxAttempts
+            ? !bypassConstraints && nextAttempts >= settings.providerEnrichmentMaxAttempts
               ? "unavailable"
               : "failed"
             : "waiting";
@@ -1358,7 +1364,7 @@ export class DotaDataService {
         const full = this.isOverviewFullyEnriched(overview);
         const message = overview.telemetryStatus.stratz.message;
         const nextAttempts = row.attempts + 1;
-        const status = full ? "full" : nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "waiting";
+        const status = full ? "full" : !bypassConstraints && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "waiting";
         this.markProviderEnrichmentAttempt(row.id, status, {
           nextAttemptAt: full || status === "unavailable" ? now : now + 6 * 60 * 60 * 1000,
           lastError: full ? null : message
@@ -1368,7 +1374,7 @@ export class DotaDataService {
         const message = error instanceof Error ? error.message : "Provider enrichment failed.";
         const isRateLimit = message.includes("rate limit reached");
         const nextAttempts = row.attempts + (isRateLimit ? 0 : 1);
-        const status = !isRateLimit && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "failed";
+        const status = !bypassConstraints && !isRateLimit && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "failed";
         this.markProviderEnrichmentAttempt(row.id, status, {
           nextAttemptAt: isRateLimit ? now + 60 * 60 * 1000 : now + Math.min(24, row.attempts + 1) * 60 * 60 * 1000,
           lastError: message

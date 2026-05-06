@@ -26,6 +26,7 @@ import {
   useCommunity,
   useEnqueueProviderEnrichment,
   useProcessProviderEnrichment,
+  useProcessProviderEnrichmentOverride,
   useProviderEnrichment,
   useSaveSettings,
   useSettings,
@@ -175,6 +176,7 @@ export function SettingsPage() {
   const providerEnrichment = useProviderEnrichment(adminUnlocked);
   const enqueueProviderEnrichment = useEnqueueProviderEnrichment();
   const processProviderEnrichment = useProcessProviderEnrichment();
+  const processProviderEnrichmentOverride = useProcessProviderEnrichmentOverride();
   const canManagePersistentSettings = !adminProtectionEnabled || adminUnlocked;
   const canManageSessionPreferences = true;
   const sessionOnlyTab = activeTab === "data" || activeTab === "accessibility";
@@ -943,7 +945,7 @@ export function SettingsPage() {
                     </button>
                     <button
                       type="button"
-                      disabled={!canManagePersistentSettings || processProviderEnrichment.isPending}
+                      disabled={!canManagePersistentSettings || processProviderEnrichment.isPending || processProviderEnrichmentOverride.isPending}
                       onClick={() => {
                         const limit = Math.min(25, Math.max(1, Number(enrichmentProcessLimit) || 5));
                         setEnrichmentResult(null);
@@ -956,6 +958,22 @@ export function SettingsPage() {
                       }}
                     >
                       {processProviderEnrichment.isPending ? "Processing..." : "Process queue now"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canManagePersistentSettings || processProviderEnrichment.isPending || processProviderEnrichmentOverride.isPending}
+                      onClick={() => {
+                        setEnrichmentResult(null);
+                        processProviderEnrichmentOverride.mutate(undefined, {
+                          onSuccess: (result: ProviderEnrichmentProcessResponse) => {
+                            setEnrichmentResult(`Override processed ${result.processed.length} job.`);
+                          },
+                          onError: (error) =>
+                            setEnrichmentResult(error instanceof Error ? error.message : "Failed to process provider override.")
+                        });
+                      }}
+                    >
+                      {processProviderEnrichmentOverride.isPending ? "Forcing..." : "Force one job"}
                     </button>
                   </div>
                   {enrichmentResult ? <p className="form-success">{enrichmentResult}</p> : null}
