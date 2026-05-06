@@ -1268,6 +1268,26 @@ export class DotaDataService {
       .run(status, Date.now(), options?.nextAttemptAt ?? Date.now(), options?.lastError ?? null, Date.now(), id);
   }
 
+  private markProviderEnrichmentStatus(
+    id: number,
+    status: EnrichmentStatus,
+    options?: { nextAttemptAt?: number; lastError?: string | null }
+  ) {
+    sqliteDb
+      .prepare(
+        `
+          update provider_enrichment_queue
+          set
+            status = ?,
+            next_attempt_at = ?,
+            last_error = ?,
+            updated_at = ?
+          where id = ?
+        `
+      )
+      .run(status, options?.nextAttemptAt ?? Date.now(), options?.lastError ?? null, Date.now(), id);
+  }
+
   async processProviderEnrichmentQueue(options?: { limit?: number; bypassConstraints?: boolean }) {
     const bypassConstraints = options?.bypassConstraints ?? false;
     const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
@@ -1299,6 +1319,21 @@ export class DotaDataService {
 
     for (const row of rows) {
       try {
+        const existingParsedData = (await this.getMatchParsedDataMap([row.matchId])).get(row.matchId);
+        if (existingParsedData?.label === "Full") {
+          this.markProviderEnrichmentStatus(row.id, "full", {
+            nextAttemptAt: now,
+            lastError: null
+          });
+          processed.push({
+            matchId: row.matchId,
+            provider: row.provider,
+            status: "full",
+            message: "Match is already fully enriched."
+          });
+          continue;
+        }
+
         if (!bypassConstraints) {
           this.rateLimitService.consume("provider_enrichment", {
             perSecond: 1000,
@@ -1322,7 +1357,7 @@ export class DotaDataService {
 
           const parsedData = (await this.getMatchParsedDataMap([row.matchId])).get(row.matchId);
           if (parsedData?.label === "Full") {
-            this.markProviderEnrichmentAttempt(row.id, "full", {
+            this.markProviderEnrichmentStatus(row.id, "full", {
               nextAttemptAt: now,
               lastError: null
             });
@@ -1365,7 +1400,8 @@ export class DotaDataService {
         const message = overview.telemetryStatus.stratz.message;
         const nextAttempts = row.attempts + 1;
         const status = full ? "full" : !bypassConstraints && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "waiting";
-        this.markProviderEnrichmentAttempt(row.id, status, {
+        const markStatus = full ? this.markProviderEnrichmentStatus.bind(this) : this.markProviderEnrichmentAttempt.bind(this);
+        markStatus(row.id, status, {
           nextAttemptAt: full || status === "unavailable" ? now : now + 6 * 60 * 60 * 1000,
           lastError: full ? null : message
         });
