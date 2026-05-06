@@ -1312,6 +1312,10 @@ export class DotaDataService {
       .run(nextAttemptAt, lastError, Date.now(), provider, Date.now());
   }
 
+  private isStratzIpBindingError(message: string | null | undefined) {
+    return (message ?? "").toLowerCase().includes("cannot use different ip addresses");
+  }
+
   async processProviderEnrichmentQueue(options?: { limit?: number; bypassConstraints?: boolean; provider?: EnrichmentProvider }) {
     const bypassConstraints = options?.bypassConstraints ?? false;
     const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
@@ -1486,6 +1490,17 @@ export class DotaDataService {
         const full = this.isOverviewFullyEnriched(overview);
         const message = overview.telemetryStatus.stratz.message;
         const nextAttempts = row.attempts + 1;
+        if (!bypassConstraints && this.isStratzIpBindingError(message)) {
+          const nextAttemptAt = now + 24 * 60 * 60 * 1000;
+          const backoffMessage = "STRATZ key is bound to another IP address; cooling down STRATZ enrichment until the production key is fixed.";
+          this.markProviderEnrichmentAttempt(row.id, "waiting", {
+            nextAttemptAt,
+            lastError: message
+          });
+          this.backoffProviderEnrichmentRows("stratz", nextAttemptAt, backoffMessage);
+          processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
+          continue;
+        }
         const status = full ? "full" : !bypassConstraints && nextAttempts >= settings.providerEnrichmentMaxAttempts ? "unavailable" : "waiting";
         const markStatus = full ? this.markProviderEnrichmentStatus.bind(this) : this.markProviderEnrichmentAttempt.bind(this);
         markStatus(row.id, status, {
@@ -1496,6 +1511,18 @@ export class DotaDataService {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Provider enrichment failed.";
         const isRateLimit = message.includes("rate limit reached");
+        const isStratzIpBindingError = row.provider === "stratz" && this.isStratzIpBindingError(message);
+        if (!bypassConstraints && isStratzIpBindingError) {
+          const nextAttemptAt = now + 24 * 60 * 60 * 1000;
+          const backoffMessage = "STRATZ key is bound to another IP address; cooling down STRATZ enrichment until the production key is fixed.";
+          this.markProviderEnrichmentAttempt(row.id, "waiting", {
+            nextAttemptAt,
+            lastError: message
+          });
+          this.backoffProviderEnrichmentRows("stratz", nextAttemptAt, backoffMessage);
+          processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
+          continue;
+        }
         const isStratzUpstreamServerError =
           row.provider === "stratz" &&
           (message.includes("status 500") || message.includes("Internal Server Error") || message.includes("unexpected error"));

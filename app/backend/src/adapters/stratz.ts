@@ -142,6 +142,10 @@ function normalizeNumberArray(value: number[] | null | undefined) {
   return Array.isArray(value) ? value.filter((entry) => typeof entry === "number" && Number.isFinite(entry)) : [];
 }
 
+function firstGraphQLError(payload: GraphQLResponse<unknown>, fallback: string) {
+  return payload.errors?.[0]?.message ?? fallback;
+}
+
 export class StratzAdapter {
   private readonly endpoint = "https://api.stratz.com/graphql";
   private readonly rateLimitService = new ProviderRateLimitService();
@@ -425,6 +429,15 @@ export class StratzAdapter {
 
   async getMatchTelemetry(matchId: number): Promise<ProviderFetchResult<StratzMatchTelemetry>> {
     let fetchedAt = Date.now();
+    const matchResult = await this.getMatchBasic(matchId);
+    fetchedAt = matchResult.fetchedAt;
+    if (matchResult.payload.errors?.length) {
+      throw new Error(firstGraphQLError(matchResult.payload, "STRATZ match lookup failed."));
+    }
+    if (!matchResult.payload.data?.match?.id) {
+      throw new Error("STRATZ match lookup returned no match.");
+    }
+
     const playersBySlot = new Map<number, { playerSlot: number | null; heroId: number | null }>();
     let playersDiagnostic: string | null = null;
     try {
