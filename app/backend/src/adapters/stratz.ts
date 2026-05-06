@@ -1,4 +1,4 @@
-import { fetchJsonWithRetry } from "../utils/http.js";
+import { fetchJsonWithRetry, UpstreamHttpError } from "../utils/http.js";
 import type { ProviderFetchResult } from "../domain/provider.js";
 import { ProviderRateLimitService } from "../services/providerRateLimitService.js";
 import { SettingsService } from "../services/settingsService.js";
@@ -126,6 +126,16 @@ export interface StratzMatchTelemetry {
   diagnostics: {
     discoveredSelections: string[];
   };
+}
+
+export interface StratzMatchDiagnosticStep {
+  operation: string;
+  ok: boolean;
+  fetchedAt: number | null;
+  statusCode: number | null;
+  errors: string[];
+  message: string | null;
+  summary: Record<string, unknown> | null;
 }
 
 function normalizeNumberArray(value: number[] | null | undefined) {
@@ -262,6 +272,155 @@ export class StratzAdapter {
       { matchId },
       "MatchPlayers"
     );
+  }
+
+  private async diagnoseStep<T>(
+    operation: string,
+    run: () => Promise<ProviderFetchResult<GraphQLResponse<T>>>,
+    summarize: (payload: GraphQLResponse<T>) => Record<string, unknown>
+  ): Promise<StratzMatchDiagnosticStep> {
+    try {
+      const result = await run();
+      const errors = result.payload.errors?.map((error) => error.message).filter(Boolean) ?? [];
+      return {
+        operation,
+        ok: errors.length === 0,
+        fetchedAt: result.fetchedAt,
+        statusCode: null,
+        errors,
+        message: errors[0] ?? null,
+        summary: summarize(result.payload)
+      };
+    } catch (error) {
+      return {
+        operation,
+        ok: false,
+        fetchedAt: null,
+        statusCode: error instanceof UpstreamHttpError ? error.statusCode : null,
+        errors: [],
+        message: error instanceof Error ? error.message : "STRATZ diagnostic step failed.",
+        summary: null
+      };
+    }
+  }
+
+  async diagnoseMatch(matchId: number) {
+    const steps: StratzMatchDiagnosticStep[] = [];
+
+    steps.push(
+      await this.diagnoseStep(
+        "MatchBasic",
+        () => this.getMatchBasic(matchId),
+        (payload) => ({ hasMatch: Boolean(payload.data?.match?.id), matchId: payload.data?.match?.id ?? null })
+      )
+    );
+
+    steps.push(
+      await this.diagnoseStep(
+        "MatchPlayers",
+        () => this.getMatchPlayersBasic(matchId),
+        (payload) => ({ playerCount: payload.data?.match?.players?.length ?? 0 })
+      )
+    );
+
+    steps.push(
+      await this.diagnoseStep(
+        "MatchPlayerTimelines",
+        () =>
+          this.execute<StratzMatchTimelineTelemetryResponse>(
+            `
+              query MatchPlayerTimelines($matchId: Long!) {
+                match(id: $matchId) {
+                  players {
+                    playerSlot
+                    stats {
+                      goldPerMinute
+                      experiencePerMinute
+                      lastHitsPerMinute
+                      deniesPerMinute
+                      heroDamagePerMinute
+                      heroDamageReceivedPerMinute
+                    }
+                  }
+                }
+              }
+            `,
+            { matchId },
+            "MatchPlayerTimelines"
+          ),
+        (payload) => ({
+          playerCount: payload.data?.match?.players?.length ?? 0,
+          playersWithStats: (payload.data?.match?.players ?? []).filter((player) => Boolean(player.stats)).length
+        })
+      )
+    );
+
+    steps.push(
+      await this.diagnoseStep(
+        "MatchPlayerPurchases",
+        () =>
+          this.execute<StratzMatchPurchaseTelemetryResponse>(
+            `
+              query MatchPlayerPurchases($matchId: Long!) {
+                match(id: $matchId) {
+                  players {
+                    playerSlot
+                    stats {
+                      itemPurchases {
+                        time
+                        itemId
+                      }
+                    }
+                  }
+                }
+              }
+            `,
+            { matchId },
+            "MatchPlayerPurchases"
+          ),
+        (payload) => ({
+          playerCount: payload.data?.match?.players?.length ?? 0,
+          purchaseEvents: (payload.data?.match?.players ?? []).reduce(
+            (sum, player) => sum + (player.stats?.itemPurchases?.length ?? 0),
+            0
+          )
+        })
+      )
+    );
+
+    steps.push(
+      await this.diagnoseStep(
+        "MatchWardTelemetry",
+        () =>
+          this.execute<StratzMatchWardTelemetryResponse>(
+            `
+              query MatchWardTelemetry($matchId: Long!) {
+                match(id: $matchId) {
+                  playbackData {
+                    wardEvents {
+                      time
+                      fromPlayer
+                      wardType
+                      action
+                      positionX
+                      positionY
+                    }
+                  }
+                }
+              }
+            `,
+            { matchId },
+            "MatchWardTelemetry"
+          ),
+        (payload) => ({ wardEvents: payload.data?.match?.playbackData?.wardEvents?.length ?? 0 })
+      )
+    );
+
+    return {
+      matchId,
+      ok: steps.every((step) => step.ok),
+      steps
+    };
   }
 
   async getMatchTelemetry(matchId: number): Promise<ProviderFetchResult<StratzMatchTelemetry>> {

@@ -4827,6 +4827,11 @@ export class DotaDataService {
     return adapter.getMatchPlayersBasic(matchId);
   }
 
+  async diagnoseStratzMatch(matchId: number) {
+    const adapter = await this.createStratzAdapter();
+    return adapter.diagnoseMatch(matchId);
+  }
+
   async testSteamLeague(leagueId: number) {
     const adapter = await this.createValveAdapter();
     return adapter.getLeagueMatches(leagueId, 5);

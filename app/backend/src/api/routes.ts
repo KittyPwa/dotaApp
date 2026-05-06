@@ -575,6 +575,32 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/providers/stratz/match-diagnostic/:matchId", { config: expensiveWriteRateLimit }, async (request, reply) => {
+    if (!(await isAdminRequest(request))) {
+      reply.code(403);
+      return { message: "Admin access required." };
+    }
+    const params = z.object({ matchId: z.coerce.number().int().positive() }).parse(request.params);
+    try {
+      const result = await service.diagnoseStratzMatch(params.matchId);
+      logger.info("STRATZ match diagnostic completed", {
+        matchId: params.matchId,
+        ok: result.ok,
+        steps: result.steps.map((step) => ({
+          operation: step.operation,
+          ok: step.ok,
+          statusCode: step.statusCode,
+          message: step.message,
+          summary: step.summary
+        }))
+      });
+      return result;
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "STRATZ match diagnostic failed." };
+    }
+  });
+
   app.get("/api/providers/steam/league-test/:leagueId", { config: expensiveWriteRateLimit }, async (request, reply) => {
     if (!(await isAdminRequest(request))) {
       reply.code(403);
