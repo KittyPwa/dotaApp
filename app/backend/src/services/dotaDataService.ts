@@ -1240,6 +1240,15 @@ export class DotaDataService {
     const includeStratz = options?.includeStratz ?? true;
     const now = Date.now();
     const openDotaReplayWindowMs = 10 * 24 * 60 * 60 * 1000;
+    sqliteDb
+      .prepare(
+        `
+          delete from provider_enrichment_queue
+          where status in ('queued', 'failed', 'waiting')
+            and provider in (${includeStratz ? "'opendota_parse', 'stratz'" : "'opendota_parse'"})
+        `
+      )
+      .run();
     const openDotaCandidateSql = `
             select m.id, m.start_time as startTime
             from matches m
