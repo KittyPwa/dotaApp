@@ -1256,13 +1256,14 @@ export class DotaDataService {
     const stratzCandidateSql = `
             select m.id, m.start_time as startTime
             from matches m
-            where not exists (
+            where m.start_time >= ?
+              and not exists (
               select 1
               from provider_enrichment_queue q
               where q.match_id = m.id
                 and q.provider = 'stratz'
             )
-            order by coalesce(m.start_time, 0) desc
+            order by m.start_time asc
             limit ?
         `;
     let openDotaRows: Array<{ id: number; startTime: number | null }>;
@@ -1274,7 +1275,7 @@ export class DotaDataService {
       }>;
       const remainingScanSlots = Math.max(0, limit - openDotaRows.length);
       if (includeStratz && remainingScanSlots > 0) {
-        stratzRows = sqliteDb.prepare(stratzCandidateSql).all(remainingScanSlots) as Array<{
+        stratzRows = sqliteDb.prepare(stratzCandidateSql).all(now - openDotaReplayWindowMs, remainingScanSlots) as Array<{
           id: number;
           startTime: number | null;
         }>;
