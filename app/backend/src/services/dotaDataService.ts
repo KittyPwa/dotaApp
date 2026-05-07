@@ -1240,12 +1240,20 @@ export class DotaDataService {
     const includeStratz = options?.includeStratz ?? true;
     const now = Date.now();
     const openDotaReplayWindowMs = 10 * 24 * 60 * 60 * 1000;
-    const candidateSql = `
-          select distinct id, startTime
-          from (
-            ${
-              includeStratz
-                ? `
+    const openDotaCandidateSql = `
+            select m.id, m.start_time as startTime
+            from matches m
+            where m.start_time >= ?
+              and not exists (
+              select 1
+              from provider_enrichment_queue q
+              where q.match_id = m.id
+                  and q.provider = 'opendota_parse'
+            )
+            order by m.start_time asc
+            limit ?
+        `;
+    const stratzCandidateSql = `
             select m.id, m.start_time as startTime
             from matches m
             where not exists (
@@ -1253,44 +1261,34 @@ export class DotaDataService {
               from provider_enrichment_queue q
               where q.match_id = m.id
                 and q.provider = 'stratz'
-                and q.status in ('full', 'unavailable', 'expired')
             )
-            `
-                : `
-            select m.id, m.start_time as startTime
-            from matches m
-            where 0
-            `
-            }
-            union
-            select m.id, m.start_time as startTime
-            from matches m
-            where m.start_time >= ?
-              and not exists (
-                select 1
-                from provider_enrichment_queue q
-                where q.match_id = m.id
-                  and q.provider = 'opendota_parse'
-                  and q.status in ('full', 'unavailable', 'expired')
-              )
-          )
-          order by coalesce(startTime, 0) desc
-          limit ?
+            order by coalesce(m.start_time, 0) desc
+            limit ?
         `;
-    let rows: Array<{ id: number; startTime: number | null }>;
+    let openDotaRows: Array<{ id: number; startTime: number | null }>;
+    let stratzRows: Array<{ id: number; startTime: number | null }> = [];
     try {
-      rows = sqliteDb.prepare(candidateSql).all(now - openDotaReplayWindowMs, limit) as Array<{
+      openDotaRows = sqliteDb.prepare(openDotaCandidateSql).all(now - openDotaReplayWindowMs, limit) as Array<{
         id: number;
         startTime: number | null;
       }>;
+      const remainingScanSlots = Math.max(0, limit - openDotaRows.length);
+      if (includeStratz && remainingScanSlots > 0) {
+        stratzRows = sqliteDb.prepare(stratzCandidateSql).all(remainingScanSlots) as Array<{
+          id: number;
+          startTime: number | null;
+        }>;
+      }
     } catch (error) {
       logger.error("Provider enrichment candidate query failed", {
         limit,
-        sql: candidateSql,
+        openDotaSql: openDotaCandidateSql,
+        stratzSql: stratzCandidateSql,
         error: error instanceof Error ? error.message : String(error)
       });
       throw error;
     }
+    const rows = [...openDotaRows, ...stratzRows];
     await this.requeueFalseFullEnrichmentEntries(
       rows.map((row) => row.id),
       now
@@ -1299,44 +1297,14 @@ export class DotaDataService {
     let stratzQueued = 0;
     let openDotaParseQueued = 0;
 
-    for (const row of rows) {
-      if (includeStratz) {
-        const existingStratzTerminal = sqliteDb
-          .prepare(
-            `
-              select 1
-              from provider_enrichment_queue
-              where match_id = ?
-                and provider = 'stratz'
-                and status in ('full', 'unavailable', 'expired')
-              limit 1
-            `
-          )
-          .get(row.id);
-        if (!existingStratzTerminal) {
-          this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
-          stratzQueued += 1;
-        }
-      }
+    for (const row of openDotaRows) {
+      this.upsertEnrichmentQueueEntry(row.id, "opendota_parse", now);
+      openDotaParseQueued += 1;
+    }
 
-      if (row.startTime && row.startTime >= now - openDotaReplayWindowMs) {
-        const existingOpenDotaTerminal = sqliteDb
-          .prepare(
-            `
-              select 1
-              from provider_enrichment_queue
-              where match_id = ?
-                and provider = 'opendota_parse'
-                and status in ('full', 'unavailable', 'expired')
-              limit 1
-            `
-          )
-          .get(row.id);
-        if (!existingOpenDotaTerminal) {
-          this.upsertEnrichmentQueueEntry(row.id, "opendota_parse", now);
-          openDotaParseQueued += 1;
-        }
-      }
+    for (const row of stratzRows) {
+      this.upsertEnrichmentQueueEntry(row.id, "stratz", now);
+      stratzQueued += 1;
     }
 
     return {
