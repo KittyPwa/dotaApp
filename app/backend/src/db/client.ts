@@ -129,6 +129,23 @@ export function runMigrations() {
       AND last_error LIKE 'STRATZ responded for this match, but did not include extra%';
 
     UPDATE provider_enrichment_queue
+    SET
+      status = 'unavailable',
+      attempts = 1,
+      next_attempt_at = updated_at,
+      last_error = CASE
+        WHEN last_error LIKE 'STRATZ provider returned an upstream error:%' THEN last_error
+        ELSE 'STRATZ provider returned an upstream error: ' || coalesce(last_error, 'Upstream request failed with status 500.')
+      END
+    WHERE provider = 'stratz'
+      AND attempts > 1
+      AND (
+        last_error LIKE '%status 500%'
+        OR last_error LIKE '%Internal Server Error%'
+        OR last_error LIKE '%unexpected error%'
+      );
+
+    UPDATE provider_enrichment_queue
     SET attempts = 1
     WHERE status = 'full'
       AND attempts > 1;

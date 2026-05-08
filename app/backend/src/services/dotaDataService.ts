@@ -1539,19 +1539,9 @@ export class DotaDataService {
     }
 
     const processed: Array<{ matchId: number; provider: EnrichmentProvider; status: EnrichmentStatus; message: string | null }> = [];
-    let stratzBackoffUntil: number | null = null;
 
     for (const row of rows) {
       try {
-        if (!bypassConstraints && row.provider === "stratz" && stratzBackoffUntil && stratzBackoffUntil > now) {
-          const message = "STRATZ match API is cooling down after an upstream 500.";
-          this.markProviderEnrichmentStatus(row.id, "waiting", {
-            nextAttemptAt: stratzBackoffUntil,
-            lastError: message
-          });
-          processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
-          continue;
-        }
         const providerQuotaHoldUntil = !bypassConstraints
           ? this.getProviderQuotaHoldUntil(row.provider === "stratz" ? "stratz" : "opendota")
           : null;
@@ -1708,16 +1698,13 @@ export class DotaDataService {
         const isStratzUpstreamServerError =
           row.provider === "stratz" &&
           (message.includes("status 500") || message.includes("Internal Server Error") || message.includes("unexpected error"));
-        if (!bypassConstraints && isStratzUpstreamServerError) {
-          const nextAttemptAt = now + 6 * 60 * 60 * 1000;
-          stratzBackoffUntil = nextAttemptAt;
-          const backoffMessage = `STRATZ match API returned 500; cooling down until ${new Date(nextAttemptAt).toISOString()}.`;
-          this.markProviderEnrichmentAttempt(row.id, "waiting", {
-            nextAttemptAt,
-            lastError: message
+        if (isStratzUpstreamServerError) {
+          const providerErrorMessage = `STRATZ provider returned an upstream error: ${message}`;
+          this.markProviderEnrichmentUnavailableAfterSingleCheck(row.id, {
+            nextAttemptAt: now,
+            lastError: providerErrorMessage
           });
-          this.backoffProviderEnrichmentRows("stratz", nextAttemptAt, backoffMessage);
-          processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
+          processed.push({ matchId: row.matchId, provider: row.provider, status: "unavailable", message: providerErrorMessage });
           continue;
         }
 
