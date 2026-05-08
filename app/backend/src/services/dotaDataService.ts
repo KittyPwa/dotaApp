@@ -1083,6 +1083,7 @@ export class DotaDataService {
           left join matches m on m.id = q.match_id
           where q.status = 'full'
             and m.start_time >= ?
+            and q.last_attempt_at is not null
           order by coalesce(q.last_attempt_at, q.updated_at) desc
           limit 100
         `
