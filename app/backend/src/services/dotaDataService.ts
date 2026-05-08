@@ -1108,11 +1108,12 @@ export class DotaDataService {
           from provider_enrichment_queue q
           left join matches m on m.id = q.match_id
           where q.last_attempt_at is not null
+            and m.start_time >= ?
           order by q.last_attempt_at desc
           limit 20
         `
       )
-      .all() as Array<{
+      .all(replayWindowStart) as Array<{
         matchId: number;
         provider: EnrichmentProvider;
         status: EnrichmentStatus;
@@ -1948,7 +1949,7 @@ export class DotaDataService {
       const openDotaFlags = {
         timelines: Number(row.timelines ?? 0) >= 10,
         itemTimings: Number(row.itemTimings ?? 0) >= 10,
-        vision: Number(row.vision ?? 0) > 0
+        vision: Number(row.vision ?? 0) >= 10
       };
       const flags = {
         hasFullMatchPayload: matchIdsWithRawPayload.has(row.matchId),

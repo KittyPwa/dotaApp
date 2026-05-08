@@ -127,6 +127,11 @@ export function runMigrations() {
       AND status = 'unavailable'
       AND attempts > 1
       AND last_error LIKE 'STRATZ responded for this match, but did not include extra%';
+
+    UPDATE provider_enrichment_queue
+    SET attempts = 1
+    WHERE status = 'full'
+      AND attempts > 1;
   `);
 }
 
