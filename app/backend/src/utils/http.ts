@@ -5,10 +5,23 @@ export class UpstreamHttpError extends Error {
     message: string,
     public readonly statusCode: number,
     public readonly retryable: boolean,
-    public readonly bodySnippet: string | null = null
+    public readonly bodySnippet: string | null = null,
+    public readonly retryAfterSeconds: number | null = null
   ) {
     super(message);
   }
+}
+
+function parseRetryAfterSeconds(headers: Headers) {
+  const value = headers.get("retry-after");
+  if (!value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 0) return Math.ceil(numeric);
+  const dateValue = Date.parse(value);
+  if (Number.isFinite(dateValue)) {
+    return Math.max(0, Math.ceil((dateValue - Date.now()) / 1000));
+  }
+  return null;
 }
 
 export async function fetchJsonWithRetry<T>(
@@ -58,6 +71,7 @@ export async function fetchJsonWithRetry<T>(
     }
 
     const retryable = response.status >= 500 || response.status === 429;
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
     const body = await response.text();
     const bodySnippet = body.replace(/\s+/g, " ").trim().slice(0, 500) || null;
     const isCloudflareChallenge =
@@ -94,13 +108,14 @@ export async function fetchJsonWithRetry<T>(
       bodySnippet
     };
 
-    if (!retryable || attempt === retries) {
+    if (!retryable || retryAfterSeconds !== null || attempt === retries) {
       logger.error("Upstream request failed", logPayload);
       throw new UpstreamHttpError(
         message,
         response.status,
         retryable,
-        bodySnippet
+        bodySnippet,
+        retryAfterSeconds
       );
     }
 

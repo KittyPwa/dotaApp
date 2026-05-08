@@ -33,6 +33,7 @@ import {
 } from "../db/schema.js";
 import { config } from "../utils/config.js";
 import { buildAssetProxyUrl, defaultHeroIconPath, defaultHeroPortraitPath, defaultItemImagePath } from "../utils/assets.js";
+import { UpstreamHttpError } from "../utils/http.js";
 import { logger } from "../utils/logger.js";
 import { RawPayloadService } from "./rawPayloadService.js";
 import { ReferenceDataService } from "./referenceDataService.js";
@@ -1665,6 +1666,22 @@ export class DotaDataService {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Provider enrichment failed.";
         const isRateLimit = message.includes("rate limit reached");
+        const isOpenDotaTemporaryUpstreamFailure =
+          row.provider === "opendota_parse" &&
+          error instanceof UpstreamHttpError &&
+          (error.retryAfterSeconds !== null || error.statusCode === 522 || error.statusCode === 429 || error.statusCode >= 500);
+        if (!bypassConstraints && isOpenDotaTemporaryUpstreamFailure) {
+          const retryAfterMs = error instanceof UpstreamHttpError && error.retryAfterSeconds !== null ? error.retryAfterSeconds * 1000 : 30 * 60 * 1000;
+          const nextAttemptAt = now + Math.max(60_000, retryAfterMs);
+          const backoffMessage = `OpenDota is temporarily unavailable; waiting until ${new Date(nextAttemptAt).toISOString()}.`;
+          this.markProviderEnrichmentStatus(row.id, "waiting", {
+            nextAttemptAt,
+            lastError: message
+          });
+          this.backoffProviderEnrichmentRows("opendota_parse", nextAttemptAt, backoffMessage);
+          processed.push({ matchId: row.matchId, provider: row.provider, status: "waiting", message });
+          continue;
+        }
         const isStratzIpBindingError = row.provider === "stratz" && this.isStratzIpBindingError(message);
         if (!bypassConstraints && isStratzIpBindingError) {
           const nextAttemptAt = now + 30 * 60 * 1000;
@@ -1729,7 +1746,12 @@ export class DotaDataService {
 
   async ensureReferenceData() {
     const adapter = await this.createOpenDotaAdapter();
-    await new ReferenceDataService(adapter, this.rawPayloads).syncIfStale();
+    try {
+      await new ReferenceDataService(adapter, this.rawPayloads).syncIfStale();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Reference data sync failed.";
+      logger.warn("Reference data sync skipped; using cached local reference data", { error: message });
+    }
   }
 
   private async getAbilityMetadataMap() {
@@ -3173,7 +3195,6 @@ export class DotaDataService {
   }
 
   async getHeroStats(options?: { leagueId?: number | null; sessionSettings?: SessionSettingsOverrides }) {
-    await this.ensureReferenceData();
     const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
     return this.analyticsService.getHeroStats(matchScope ?? undefined, options);
   }
@@ -4866,7 +4887,6 @@ export class DotaDataService {
     sessionSettings?: SessionSettingsOverrides;
     browserPreferences?: BrowserPreferencesOverrides;
   }) {
-    await this.ensureReferenceData();
     const settings = await this.settingsService.getSettings({
       adminUnlocked: options?.adminUnlocked,
       browserPreferences: options?.browserPreferences
