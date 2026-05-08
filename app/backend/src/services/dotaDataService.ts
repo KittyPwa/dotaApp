@@ -1041,6 +1041,7 @@ export class DotaDataService {
   }
 
   async getProviderEnrichmentQueueSummary() {
+    const replayWindowStart = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const counts = sqliteDb
       .prepare(
         `
@@ -1081,11 +1082,12 @@ export class DotaDataService {
           from provider_enrichment_queue q
           left join matches m on m.id = q.match_id
           where q.status = 'full'
+            and m.start_time >= ?
           order by coalesce(q.last_attempt_at, q.updated_at) desc
           limit 100
         `
       )
-      .all() as Array<{ matchId: number; provider: EnrichmentProvider; enrichedAt: number | null; startTime: number | null }>;
+      .all(replayWindowStart) as Array<{ matchId: number; provider: EnrichmentProvider; enrichedAt: number | null; startTime: number | null }>;
     const parsedDataByMatchId = await this.getMatchParsedDataMap(enrichedMatchCandidates.map((match) => match.matchId));
     const enrichedMatches = enrichedMatchCandidates
       .filter((match) => parsedDataByMatchId.get(match.matchId)?.label === "Full")
@@ -1437,17 +1439,18 @@ export class DotaDataService {
     const bypassConstraints = options?.bypassConstraints ?? false;
     const limit = bypassConstraints ? 1 : Math.min(Math.max(options?.limit ?? 5, 1), 25);
     const now = Date.now();
+    const replayWindowStart = now - 10 * 24 * 60 * 60 * 1000;
     const settings = await this.settingsService.getSettings({ includeProtected: true });
     const statusFilter = "'queued', 'failed', 'waiting'";
     const dueFilter = bypassConstraints ? "" : "and next_attempt_at <= ?";
     const providerFilter = options?.provider ? "and provider = ?" : "";
     const queryArgs = bypassConstraints
       ? options?.provider
-        ? [options.provider, limit]
-        : [limit]
+        ? [replayWindowStart, options.provider, limit]
+        : [replayWindowStart, limit]
       : options?.provider
-        ? [now, options.provider, limit]
-        : [now, limit];
+        ? [replayWindowStart, now, options.provider, limit]
+        : [replayWindowStart, now, limit];
     const actionableFirstOrder = bypassConstraints
       ? `
             case
@@ -1492,9 +1495,11 @@ export class DotaDataService {
         `
       : "";
     const queueSql = `
-          select id, match_id as matchId, provider, attempts
+          select provider_enrichment_queue.id, match_id as matchId, provider, attempts
           from provider_enrichment_queue
+          left join matches m on m.id = provider_enrichment_queue.match_id
           where status in (${statusFilter})
+            and m.start_time >= ?
             ${dueFilter}
             ${providerFilter}
           order by
