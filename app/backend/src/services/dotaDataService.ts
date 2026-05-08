@@ -1495,10 +1495,14 @@ export class DotaDataService {
         `
       : "";
     const queueSql = `
-          select provider_enrichment_queue.id, match_id as matchId, provider, attempts
+          select
+            provider_enrichment_queue.id as id,
+            provider_enrichment_queue.match_id as matchId,
+            provider_enrichment_queue.provider as provider,
+            provider_enrichment_queue.attempts as attempts
           from provider_enrichment_queue
           left join matches m on m.id = provider_enrichment_queue.match_id
-          where status in (${statusFilter})
+          where provider_enrichment_queue.status in (${statusFilter})
             and m.start_time >= ?
             ${dueFilter}
             ${providerFilter}
@@ -1508,8 +1512,8 @@ export class DotaDataService {
               when 'opendota_parse' then 0
               else 1
             end,
-            next_attempt_at asc,
-            id asc
+            provider_enrichment_queue.next_attempt_at asc,
+            provider_enrichment_queue.id asc
           limit ?
         `;
     let rows: Array<{ id: number; matchId: number; provider: EnrichmentProvider; attempts: number }>;
