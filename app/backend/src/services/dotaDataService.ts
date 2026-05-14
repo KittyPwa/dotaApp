@@ -137,6 +137,9 @@ export class DotaDataService {
   private readonly settingsService = new SettingsService();
   private readonly analyticsService = new AnalyticsService();
   private readonly rateLimitService = new ProviderRateLimitService();
+  private readonly playerRefreshJobs = new Set<number>();
+  private readonly playerRefreshStartedAt = new Map<number, number>();
+  private playerOpenDotaRefreshHoldUntil = 0;
 
   private uniquePositiveIds(ids: number[]) {
     return ids.filter((id, index, list) => Number.isInteger(id) && id > 0 && list.indexOf(id) === index);
@@ -2039,6 +2042,115 @@ export class DotaDataService {
     return `Current + previous ${recentPatchCount} patch${recentPatchCount === 1 ? "" : "es"}`;
   }
 
+  private async refreshPlayerLocalData(playerId: number, options?: { includeHistory?: boolean }) {
+    const adapter = await this.createOpenDotaAdapter();
+    const [profile, recentMatches, winLoss] = await Promise.all([
+      adapter.getPlayerProfile(playerId),
+      adapter.getPlayerRecentMatches(playerId),
+      adapter.getPlayerWinLoss(playerId)
+    ]);
+
+    const historyMatches = options?.includeHistory ? await adapter.getPlayerMatches(playerId, { days: 3650 }) : null;
+
+    await this.rawPayloads.store({
+      provider: "opendota",
+      entityType: "player_profile",
+      entityId: String(playerId),
+      fetchedAt: profile.fetchedAt,
+      rawJson: profile.payload
+    });
+
+    await this.rawPayloads.store({
+      provider: "opendota",
+      entityType: "player_recent_matches",
+      entityId: String(playerId),
+      fetchedAt: recentMatches.fetchedAt,
+      rawJson: recentMatches.payload
+    });
+
+    await this.rawPayloads.store({
+      provider: "opendota",
+      entityType: "player_wl",
+      entityId: String(playerId),
+      fetchedAt: winLoss.fetchedAt,
+      rawJson: winLoss.payload
+    });
+
+    if (historyMatches) {
+      await this.rawPayloads.store({
+        provider: "opendota",
+        entityType: "player_match_history",
+        entityId: String(playerId),
+        fetchedAt: historyMatches.fetchedAt,
+        rawJson: historyMatches.payload,
+        requestContext: { days: 3650 }
+      });
+    }
+
+    await db
+      .insert(players)
+      .values({
+        id: playerId,
+        personaname: profile.payload.profile?.personaname ?? null,
+        avatar: profile.payload.profile?.avatarmedium ?? null,
+        profileUrl: profile.payload.profile?.profileurl ?? null,
+        countryCode: profile.payload.profile?.loccountrycode ?? null,
+        rankTier: profile.payload.rank_tier ?? null,
+        leaderboardRank: profile.payload.leaderboard_rank ?? null,
+        lastProfileFetchedAt: new Date(profile.fetchedAt),
+        updatedAt: new Date()
+      })
+      .onConflictDoUpdate({
+        target: players.id,
+        set: {
+          personaname: profile.payload.profile?.personaname ?? null,
+          avatar: profile.payload.profile?.avatarmedium ?? null,
+          profileUrl: profile.payload.profile?.profileurl ?? null,
+          countryCode: profile.payload.profile?.loccountrycode ?? null,
+          rankTier: profile.payload.rank_tier ?? null,
+          leaderboardRank: profile.payload.leaderboard_rank ?? null,
+          lastProfileFetchedAt: new Date(profile.fetchedAt),
+          updatedAt: new Date()
+        }
+      });
+
+    const combinedMatches = [...recentMatches.payload, ...(historyMatches?.payload ?? [])];
+    const dedupedMatches = new Map<number, OpenDotaRecentMatch>();
+    for (const match of combinedMatches) {
+      dedupedMatches.set(match.match_id, match);
+    }
+
+    for (const match of dedupedMatches.values()) {
+      await this.upsertRecentMatch(db, playerId, match, historyMatches?.fetchedAt ?? recentMatches.fetchedAt);
+    }
+  }
+
+  private queuePlayerRefresh(playerId: number, options?: { includeHistory?: boolean }) {
+    if (this.playerRefreshJobs.has(playerId)) {
+      return;
+    }
+
+    this.playerRefreshJobs.add(playerId);
+    this.playerRefreshStartedAt.set(playerId, Date.now());
+    void this.refreshPlayerLocalData(playerId, options)
+      .catch((error) => {
+        if (
+          error instanceof UpstreamHttpError &&
+          (error.retryAfterSeconds !== null || error.statusCode === 429 || error.statusCode === 522 || error.statusCode >= 500)
+        ) {
+          const holdMs = Math.max(error.retryAfterSeconds !== null ? error.retryAfterSeconds * 1000 : 0, 15 * 60 * 1000);
+          this.playerOpenDotaRefreshHoldUntil = Date.now() + holdMs;
+        }
+        logger.warn("Background player refresh skipped; using cached player data", {
+          playerId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      })
+      .finally(() => {
+        this.playerRefreshJobs.delete(playerId);
+      });
+  }
+
   private buildMatchScopeCondition(
     matchTable: { patchId: typeof matches.patchId; startTime: typeof matches.startTime },
     matchScope: { patchIds: number[]; cutoffStartTimeMs: number | null } | null
@@ -2098,105 +2210,34 @@ export class DotaDataService {
           : typeof recentMatchesMeta?.latestMatch === "string"
             ? Number(recentMatchesMeta.latestMatch)
             : null;
+    const recentRefreshStartedAt = this.playerRefreshStartedAt.get(playerId) ?? 0;
+    const refreshAlreadyRunning = this.playerRefreshJobs.has(playerId);
+    const refreshCooldownActive =
+      refreshAlreadyRunning || Date.now() < this.playerOpenDotaRefreshHoldUntil || Date.now() - recentRefreshStartedAt < 2 * 60 * 1000;
     const shouldRefresh =
-      autoRefreshOnOpen ||
-      missingRankInfo ||
-      !playerRow?.lastProfileFetchedAt ||
-      !recentLastUpdated ||
-      Date.now() - playerRow.lastProfileFetchedAt.getTime() > config.staleWindows.playerRecentMatchesMs ||
-      Date.now() - recentLastUpdated > config.staleWindows.playerRecentMatchesMs;
+      !refreshCooldownActive &&
+      (autoRefreshOnOpen ||
+        missingRankInfo ||
+        !playerRow?.lastProfileFetchedAt ||
+        !recentLastUpdated ||
+        Date.now() - playerRow.lastProfileFetchedAt.getTime() > config.staleWindows.playerRecentMatchesMs ||
+        Date.now() - recentLastUpdated > config.staleWindows.playerRecentMatchesMs);
     const latestHistorySyncAt = await this.getLatestRawPayloadFetchedAt("player_match_history", String(playerId));
     const shouldRefreshHistory =
-      priorityPlayer && (!latestHistorySyncAt || Date.now() - latestHistorySyncAt > 24 * 60 * 60 * 1000);
+      !refreshCooldownActive && priorityPlayer && (!latestHistorySyncAt || Date.now() - latestHistorySyncAt > 24 * 60 * 60 * 1000);
 
     let source: "cache" | "fresh" = "cache";
+    let refreshPending = refreshAlreadyRunning;
 
     if (!options?.cacheOnly && (shouldRefresh || shouldRefreshHistory)) {
-      logger.info("Refreshing player data", { playerId });
-      const adapter = await this.createOpenDotaAdapter();
-      const requests = [
-        adapter.getPlayerProfile(playerId),
-        adapter.getPlayerRecentMatches(playerId),
-        adapter.getPlayerWinLoss(playerId)
-      ] as const;
-      const [profile, recentMatches, winLoss] = await Promise.all(requests);
-
-      const historyMatches = shouldRefreshHistory
-        ? await adapter.getPlayerMatches(playerId, { days: 3650 })
-        : null;
-
-      source = "fresh";
-
-      await this.rawPayloads.store({
-        provider: "opendota",
-        entityType: "player_profile",
-        entityId: String(playerId),
-        fetchedAt: profile.fetchedAt,
-        rawJson: profile.payload
-      });
-
-      await this.rawPayloads.store({
-        provider: "opendota",
-        entityType: "player_recent_matches",
-        entityId: String(playerId),
-        fetchedAt: recentMatches.fetchedAt,
-        rawJson: recentMatches.payload
-      });
-
-      await this.rawPayloads.store({
-        provider: "opendota",
-        entityType: "player_wl",
-        entityId: String(playerId),
-        fetchedAt: winLoss.fetchedAt,
-        rawJson: winLoss.payload
-      });
-
-      if (historyMatches) {
-        await this.rawPayloads.store({
-          provider: "opendota",
-          entityType: "player_match_history",
-          entityId: String(playerId),
-          fetchedAt: historyMatches.fetchedAt,
-          rawJson: historyMatches.payload,
-          requestContext: { days: 3650 }
-        });
-      }
-
-      await db
-        .insert(players)
-        .values({
-          id: playerId,
-          personaname: profile.payload.profile?.personaname ?? null,
-          avatar: profile.payload.profile?.avatarmedium ?? null,
-          profileUrl: profile.payload.profile?.profileurl ?? null,
-          countryCode: profile.payload.profile?.loccountrycode ?? null,
-          rankTier: profile.payload.rank_tier ?? null,
-          leaderboardRank: profile.payload.leaderboard_rank ?? null,
-          lastProfileFetchedAt: new Date(profile.fetchedAt),
-          updatedAt: new Date()
-        })
-        .onConflictDoUpdate({
-          target: players.id,
-          set: {
-            personaname: profile.payload.profile?.personaname ?? null,
-            avatar: profile.payload.profile?.avatarmedium ?? null,
-            profileUrl: profile.payload.profile?.profileurl ?? null,
-            countryCode: profile.payload.profile?.loccountrycode ?? null,
-            rankTier: profile.payload.rank_tier ?? null,
-            leaderboardRank: profile.payload.leaderboard_rank ?? null,
-            lastProfileFetchedAt: new Date(profile.fetchedAt),
-            updatedAt: new Date()
-          }
-        });
-
-      const combinedMatches = [...recentMatches.payload, ...(historyMatches?.payload ?? [])];
-      const dedupedMatches = new Map<number, OpenDotaRecentMatch>();
-      for (const match of combinedMatches) {
-        dedupedMatches.set(match.match_id, match);
-      }
-
-      for (const match of dedupedMatches.values()) {
-        await this.upsertRecentMatch(db, playerId, match, historyMatches?.fetchedAt ?? recentMatches.fetchedAt);
+      if (playerRow) {
+        logger.info("Queueing background player refresh", { playerId });
+        refreshPending = true;
+        this.queuePlayerRefresh(playerId, { includeHistory: shouldRefreshHistory });
+      } else {
+        logger.info("Refreshing uncached player data", { playerId });
+        await this.refreshPlayerLocalData(playerId, { includeHistory: shouldRefreshHistory });
+        source = "fresh";
       }
     }
 
@@ -2430,6 +2471,7 @@ export class DotaDataService {
       autoRefreshOnOpen,
       historySyncedAt,
       source,
+      refreshPending,
       lastSyncedAt: freshPlayer.lastProfileFetchedAt?.getTime() ?? null,
       totalStoredMatches: totalStoredMatches ?? 0,
       totalLocalMatches: totalLocalMatches ?? 0,

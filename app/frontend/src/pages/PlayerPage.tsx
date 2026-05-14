@@ -276,7 +276,10 @@ export function PlayerPage() {
         <>
           <MetricGrid
             items={[
-              { label: "Source", value: playerData.source === "fresh" ? "Fresh fetch" : "Cache" },
+              {
+                label: "Source",
+                value: playerData.source === "fresh" ? "Fresh fetch" : playerData.refreshPending ? "Cache, refreshing" : "Cache"
+              },
               { label: "Last synced", value: formatDate(playerData.lastSyncedAt) },
               { label: "Visible matches", value: playerData.totalStoredMatches },
               { label: "Local matches", value: playerData.totalLocalMatches },

@@ -75,6 +75,7 @@ export const playerOverviewSchema = z.object({
   autoRefreshOnOpen: z.boolean(),
   historySyncedAt: z.number().nullable(),
   source: cacheSourceSchema,
+  refreshPending: z.boolean().default(false),
   lastSyncedAt: z.number().nullable(),
   totalStoredMatches: z.number(),
   totalLocalMatches: z.number(),

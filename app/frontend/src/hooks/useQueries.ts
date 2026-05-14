@@ -228,7 +228,8 @@ export function usePlayer(
   return useQuery({
     queryKey: ["player", playerId, filters?.leagueId ?? null, filters?.queue ?? "all", filters?.heroId ?? null],
     queryFn: () => apiGet<PlayerOverview>(`/api/players/${playerId}${suffix ? `?${suffix}` : ""}`),
-    enabled: playerId !== null
+    enabled: playerId !== null,
+    refetchInterval: (query) => (query.state.data?.refreshPending ? 5_000 : false)
   });
 }
 
