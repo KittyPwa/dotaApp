@@ -1026,10 +1026,11 @@ export function DraftsPage() {
                     const nextSlot = selectedDraft.slots[index + 1];
                     const startsPhase = index === 0 || previousSlot?.kind !== slot.kind;
                     const endsPhase = index === selectedDraft.slots.length - 1 || nextSlot?.kind !== slot.kind;
+                    const hasPhaseGap = startsPhase && index > 0;
                     return (
                       <div
                         key={slot.id}
-                        className={`draft-sequence-row ${slot.kind} ${startsPhase ? "phase-start" : ""} ${endsPhase ? "phase-end" : ""}`}
+                        className={`draft-sequence-row ${slot.kind} ${startsPhase ? "phase-start" : ""} ${endsPhase ? "phase-end" : ""} ${hasPhaseGap ? "phase-gap" : ""}`}
                       >
                         <div className="draft-sequence-cell first">
                           {slot.side === "first" ? (

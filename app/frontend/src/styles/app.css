@@ -1405,7 +1405,7 @@ button.compact {
 .draft-sequence-board {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) 2.1rem minmax(260px, 1fr);
-  grid-auto-rows: var(--draft-row-height);
+  grid-auto-rows: calc(var(--draft-row-height) + 0.22rem);
   gap: 0 0.35rem;
   align-items: center;
 }
@@ -1436,8 +1436,8 @@ button.compact {
 
 .draft-sequence-cell {
   min-height: 0;
-  height: var(--draft-row-height);
-  padding: 0.06rem 0;
+  height: 100%;
+  padding: 0.12rem 0;
 }
 
 .draft-sequence-row.ban .draft-sequence-cell,
@@ -1453,6 +1453,12 @@ button.compact {
 .draft-sequence-row.phase-start .draft-sequence-cell,
 .draft-sequence-row.phase-start .draft-sequence-number {
   border-top: 1px solid rgba(148, 163, 184, 0.28);
+  padding-top: 0.28rem;
+}
+
+.draft-sequence-row.phase-gap .draft-sequence-cell,
+.draft-sequence-row.phase-gap .draft-sequence-number {
+  box-shadow: inset 0 0.22rem 0 var(--page-bg-start);
 }
 
 .draft-sequence-row.phase-start.pick .draft-sequence-cell,
@@ -1468,6 +1474,7 @@ button.compact {
 .draft-sequence-row.phase-end .draft-sequence-cell,
 .draft-sequence-row.phase-end .draft-sequence-number {
   border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  padding-bottom: 0.28rem;
 }
 
 .draft-sequence-row.phase-end.pick .draft-sequence-cell,
@@ -1498,18 +1505,21 @@ button.compact {
 
 .draft-sequence-cell.first {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
 }
 
 .draft-sequence-cell.second {
   display: flex;
+  align-items: center;
   justify-content: flex-start;
 }
 
 .draft-sequence-number {
-  height: var(--draft-row-height);
+  height: 100%;
   display: grid;
   place-items: center;
+  padding: 0.12rem 0;
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 800;
