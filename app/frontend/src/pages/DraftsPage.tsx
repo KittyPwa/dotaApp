@@ -1021,8 +1021,11 @@ export function DraftsPage() {
                   />
                 </div>
                 <div className="draft-sequence-board">
-                  {selectedDraft.slots.map((slot, index) => (
-                    <div key={slot.id} className={`draft-sequence-row ${slot.kind}`}>
+                  {selectedDraft.slots.map((slot, index) => {
+                    const previousSlot = selectedDraft.slots[index - 1];
+                    const startsPhase = index === 0 || previousSlot?.kind !== slot.kind;
+                    return (
+                    <div key={slot.id} className={`draft-sequence-row ${slot.kind} ${startsPhase ? "phase-start" : ""}`}>
                       <div className="draft-sequence-cell first">
                         {slot.side === "first" ? (
                           <div
@@ -1065,7 +1068,8 @@ export function DraftsPage() {
                         ) : null}
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
                 <div className="draft-side-shell second">
                   <div className="draft-editor-actions">

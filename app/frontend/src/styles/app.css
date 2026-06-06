@@ -1437,10 +1437,42 @@ button.compact {
 .draft-sequence-cell {
   min-height: 0;
   height: var(--draft-row-height);
+  padding: 0.06rem 0;
 }
 
-.draft-sequence-row.pick .draft-sequence-cell {
-  min-height: 0;
+.draft-sequence-row.ban .draft-sequence-cell,
+.draft-sequence-row.ban .draft-sequence-number {
+  background: linear-gradient(90deg, rgba(251, 113, 133, 0.07), rgba(251, 113, 133, 0.025));
+}
+
+.draft-sequence-row.pick .draft-sequence-cell,
+.draft-sequence-row.pick .draft-sequence-number {
+  background: linear-gradient(90deg, rgba(52, 211, 153, 0.075), rgba(52, 211, 153, 0.025));
+}
+
+.draft-sequence-row.ban .draft-sequence-cell.first,
+.draft-sequence-row.pick .draft-sequence-cell.first {
+  border-radius: 10px 0 0 10px;
+}
+
+.draft-sequence-row.ban .draft-sequence-cell.second,
+.draft-sequence-row.pick .draft-sequence-cell.second {
+  border-radius: 0 10px 10px 0;
+}
+
+.draft-sequence-row.phase-start .draft-sequence-cell,
+.draft-sequence-row.phase-start .draft-sequence-number {
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.draft-sequence-row.phase-start.pick .draft-sequence-cell,
+.draft-sequence-row.phase-start.pick .draft-sequence-number {
+  border-top-color: rgba(52, 211, 153, 0.38);
+}
+
+.draft-sequence-row.phase-start.ban .draft-sequence-cell,
+.draft-sequence-row.phase-start.ban .draft-sequence-number {
+  border-top-color: rgba(251, 113, 133, 0.38);
 }
 
 .draft-sequence-cell.first {
@@ -1559,13 +1591,31 @@ button.compact {
   display: grid;
   align-content: center;
   justify-items: center;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
   border-radius: 6px;
   background: rgba(23, 32, 42, 0.06);
   text-transform: uppercase;
 }
 
+.draft-slot-card.pick .draft-slot-label {
+  min-width: 1.9rem;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.13);
+  color: var(--team-radiant-strong);
+}
+
+.draft-slot-card.ban .draft-slot-label {
+  background: rgba(251, 113, 133, 0.11);
+  color: var(--team-dire-strong);
+}
+
 .draft-slot-label strong {
   font-size: 0.68rem;
+}
+
+.draft-slot-card.pick .draft-slot-label strong {
+  font-size: 0.72rem;
 }
 
 .draft-slot-label small {
