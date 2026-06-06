@@ -3186,6 +3186,12 @@ export class DotaDataService {
       radiantWin: freshMatch.radiantWin,
       radiantScore: freshMatch.radiantScore,
       direScore: freshMatch.direScore,
+      radiantTeamId: freshMatch.radiantTeamId,
+      radiantTeamName: null,
+      radiantTeamTag: null,
+      direTeamId: freshMatch.direTeamId,
+      direTeamName: null,
+      direTeamTag: null,
       patch: patchRow[0]?.name ?? null,
       league: leagueRow[0]?.name ?? null,
       telemetryStatus: {
@@ -3957,6 +3963,12 @@ export class DotaDataService {
         totalKills: match.totalKills ?? 0,
         radiantScore: match.radiantScore,
         direScore: match.direScore,
+        radiantTeamId: null,
+        radiantTeamName: null,
+        radiantTeamTag: null,
+        direTeamId: null,
+        direTeamName: null,
+        direTeamTag: null,
         leagueId: match.leagueId,
         patch: match.patch ?? null,
         league: match.leagueId ? savedLeagueNames.get(match.leagueId) ?? match.league ?? `League ${match.leagueId}` : null,
@@ -4059,6 +4071,8 @@ export class DotaDataService {
   async getLeagueOverview(leagueId: number): Promise<LeagueOverview> {
     await this.ensureReferenceData();
     const settings = await this.settingsService.getSettings();
+    const radiantTeam = alias(teams, "radiant_team");
+    const direTeam = alias(teams, "dire_team");
     const [leagueRow] = await db.select().from(leagues).where(eq(leagues.id, leagueId)).limit(1);
     const savedLeague = settings.savedLeagues.find((league) => league.leagueId === leagueId);
     if (!leagueRow && !savedLeague) {
@@ -4068,7 +4082,7 @@ export class DotaDataService {
 
     const [summary] = await db
       .select({
-        matchCount: count(matches.id),
+        matchCount: sql<number>`count(distinct ${matches.id})`,
         firstMatchTime: sql<Date | null>`min(${matches.startTime})`,
         lastMatchTime: sql<Date | null>`max(${matches.startTime})`,
         uniquePlayers: sql<number>`count(distinct ${matchPlayers.playerId})`,
@@ -4086,6 +4100,12 @@ export class DotaDataService {
         radiantWin: matches.radiantWin,
         radiantScore: matches.radiantScore,
         direScore: matches.direScore,
+        radiantTeamId: matches.radiantTeamId,
+        radiantTeamName: radiantTeam.name,
+        radiantTeamTag: radiantTeam.tag,
+        direTeamId: matches.direTeamId,
+        direTeamName: direTeam.name,
+        direTeamTag: direTeam.tag,
         patch: patches.name,
         playerCount: sql<number>`count(distinct ${matchPlayers.playerSlot})`,
         totalKills: sql<number>`sum(coalesce(${matchPlayers.kills}, 0))`
@@ -4093,6 +4113,8 @@ export class DotaDataService {
       .from(matches)
       .leftJoin(matchPlayers, eq(matchPlayers.matchId, matches.id))
       .leftJoin(patches, eq(patches.id, matches.patchId))
+      .leftJoin(radiantTeam, eq(radiantTeam.id, matches.radiantTeamId))
+      .leftJoin(direTeam, eq(direTeam.id, matches.direTeamId))
       .where(eq(matches.leagueId, leagueId))
       .groupBy(
         matches.id,
@@ -4101,6 +4123,12 @@ export class DotaDataService {
         matches.radiantWin,
         matches.radiantScore,
         matches.direScore,
+        matches.radiantTeamId,
+        radiantTeam.name,
+        radiantTeam.tag,
+        matches.direTeamId,
+        direTeam.name,
+        direTeam.tag,
         patches.name
       )
       .orderBy(desc(matches.startTime));
@@ -4377,6 +4405,12 @@ export class DotaDataService {
         totalKills: match.totalKills ?? 0,
         radiantScore: match.radiantScore,
         direScore: match.direScore,
+        radiantTeamId: match.radiantTeamId,
+        radiantTeamName: match.radiantTeamName ?? null,
+        radiantTeamTag: match.radiantTeamTag ?? null,
+        direTeamId: match.direTeamId,
+        direTeamName: match.direTeamName ?? null,
+        direTeamTag: match.direTeamTag ?? null,
         patch: match.patch ?? null,
         leagueId,
         league: leagueName,

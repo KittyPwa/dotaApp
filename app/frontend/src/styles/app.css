@@ -531,6 +531,44 @@ tbody tr.league-row-dire {
   color: var(--muted);
 }
 
+.matchup-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.team-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.team-pill.radiant.winner {
+  border-color: rgba(52, 211, 153, 0.72);
+  background: var(--team-radiant-soft);
+  color: var(--team-radiant-strong);
+}
+
+.team-pill.dire.winner {
+  border-color: rgba(251, 113, 133, 0.72);
+  background: var(--team-dire-soft);
+  color: var(--team-dire-strong);
+}
+
+.matchup-separator {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .table-link-button {
   border: 0;
   background: transparent;

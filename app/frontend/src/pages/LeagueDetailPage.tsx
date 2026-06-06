@@ -12,7 +12,7 @@ import { usePagination } from "../hooks/usePagination";
 import { useLeague, useSettings, useSyncLeague } from "../hooks/useQueries";
 import { formatDate, formatDuration, formatNumber } from "../lib/format";
 
-type MatchSortKey = "match" | "start" | "duration" | "outcome" | "score" | "patch" | "parsedData";
+type MatchSortKey = "match" | "start" | "duration" | "teams" | "score" | "patch" | "parsedData";
 type HeroSortKey = "hero" | "games" | "wins" | "losses" | "winrate" | "players";
 type PlayerSortKey = "player" | "games" | "wins" | "losses" | "winrate" | "heroes";
 type ItemSortKey = "item" | "games" | "wins" | "losses" | "winrate";
@@ -21,6 +21,11 @@ type LeagueTab = "heroes" | "players" | "teams" | "items" | "matches" | "drafts"
 
 function ParsedDataPill({ label }: { label: string }) {
   return <span className={`parsed-data-pill ${label === "Full" ? "rich" : "basic"}`}>{label}</span>;
+}
+
+function formatMatchTeam(name: string | null, tag: string | null, fallback: string) {
+  if (name && tag && name.toLowerCase() !== tag.toLowerCase()) return `${name} (${tag})`;
+  return name ?? tag ?? fallback;
 }
 
 export function LeagueDetailPage() {
@@ -256,11 +261,15 @@ export function LeagueDetailPage() {
   const sortedMatches = useMemo(() => {
     const needle = matchSearch.trim().toLowerCase();
     const rows = [...(query.data?.matches ?? [])].filter((match) => {
+      const radiantTeam = formatMatchTeam(match.radiantTeamName, match.radiantTeamTag, "Radiant").toLowerCase();
+      const direTeam = formatMatchTeam(match.direTeamName, match.direTeamTag, "Dire").toLowerCase();
       if (!needle) return true;
       return (
         String(match.matchId).includes(needle) ||
         (match.league ?? "").toLowerCase().includes(needle) ||
-        (match.patch ?? "").toLowerCase().includes(needle)
+        (match.patch ?? "").toLowerCase().includes(needle) ||
+        radiantTeam.includes(needle) ||
+        direTeam.includes(needle)
       );
     });
     rows.sort((left, right) => {
@@ -272,8 +281,10 @@ export function LeagueDetailPage() {
         case "duration":
           compare = (left.durationSeconds ?? 0) - (right.durationSeconds ?? 0);
           break;
-        case "outcome":
-          compare = Number(left.radiantWin ?? false) - Number(right.radiantWin ?? false);
+        case "teams":
+          compare = formatMatchTeam(left.radiantTeamName, left.radiantTeamTag, "Radiant").localeCompare(
+            formatMatchTeam(right.radiantTeamName, right.radiantTeamTag, "Radiant")
+          );
           break;
         case "score":
           compare = ((left.radiantScore ?? 0) + (left.direScore ?? 0)) - ((right.radiantScore ?? 0) + (right.direScore ?? 0));
@@ -734,7 +745,7 @@ export function LeagueDetailPage() {
                       setMatchSearch(event.target.value);
                       matchPagination.resetPage();
                     }}
-                    placeholder="Match, patch, league"
+                    placeholder="Match, team, patch"
                   />
                 </label>
               </div>
@@ -764,14 +775,28 @@ export function LeagueDetailPage() {
                 { key: "start", header: "Start", sortable: true, cell: (match) => formatDate(match.startTime) },
                 { key: "duration", header: "Duration", sortable: true, cell: (match) => formatDuration(match.durationSeconds) },
                 {
-                  key: "outcome",
-                  header: "Outcome",
+                  key: "teams",
+                  header: "Teams",
                   sortable: true,
-                  cell: (match) => (
-                    <span className={`outcome-pill ${match.radiantWin === null ? "unknown" : match.radiantWin ? "radiant" : "dire"}`}>
-                      {match.radiantWin === null ? "Unknown" : match.radiantWin ? "Radiant" : "Dire"}
-                    </span>
-                  )
+                  cell: (match) => {
+                    const radiantName = formatMatchTeam(match.radiantTeamName, match.radiantTeamTag, "Radiant");
+                    const direName = formatMatchTeam(match.direTeamName, match.direTeamTag, "Dire");
+                    return (
+                      <span className="matchup-cell">
+                        <span
+                          className={`team-pill radiant${match.radiantWin === null ? "" : match.radiantWin ? " winner" : ""}`}
+                        >
+                          {radiantName}
+                        </span>
+                        <span className="matchup-separator">vs</span>
+                        <span
+                          className={`team-pill dire${match.radiantWin === null ? "" : match.radiantWin ? "" : " winner"}`}
+                        >
+                          {direName}
+                        </span>
+                      </span>
+                    );
+                  }
                 },
                 {
                   key: "score",
