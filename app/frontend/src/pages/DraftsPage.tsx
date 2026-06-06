@@ -1023,52 +1023,57 @@ export function DraftsPage() {
                 <div className="draft-sequence-board">
                   {selectedDraft.slots.map((slot, index) => {
                     const previousSlot = selectedDraft.slots[index - 1];
+                    const nextSlot = selectedDraft.slots[index + 1];
                     const startsPhase = index === 0 || previousSlot?.kind !== slot.kind;
+                    const endsPhase = index === selectedDraft.slots.length - 1 || nextSlot?.kind !== slot.kind;
                     return (
-                    <div key={slot.id} className={`draft-sequence-row ${slot.kind} ${startsPhase ? "phase-start" : ""}`}>
-                      <div className="draft-sequence-cell first">
-                        {slot.side === "first" ? (
-                          <div
-                            className={`draft-slot-wrapper ${slot.kind} ${targetSlotId === slot.id ? "active" : ""}`}
-                            onClick={() => setTargetSlotId(slot.id)}
-                          >
-                            <DraftSlotCard
-                              slot={slot}
-                              side="first"
-                              heroesById={heroesById}
-                              onOpenPicker={() => {
-                                setTargetSlotId(slot.id);
-                                setPickerSlotId(slot.id);
-                              }}
-                              onChange={(heroIds) => updateSlot(slot.id, heroIds)}
-                            />
-                          </div>
-                        ) : null}
+                      <div
+                        key={slot.id}
+                        className={`draft-sequence-row ${slot.kind} ${startsPhase ? "phase-start" : ""} ${endsPhase ? "phase-end" : ""}`}
+                      >
+                        <div className="draft-sequence-cell first">
+                          {slot.side === "first" ? (
+                            <div
+                              className={`draft-slot-wrapper ${slot.kind} ${targetSlotId === slot.id ? "active" : ""}`}
+                              onClick={() => setTargetSlotId(slot.id)}
+                            >
+                              <DraftSlotCard
+                                slot={slot}
+                                side="first"
+                                heroesById={heroesById}
+                                onOpenPicker={() => {
+                                  setTargetSlotId(slot.id);
+                                  setPickerSlotId(slot.id);
+                                }}
+                                onChange={(heroIds) => updateSlot(slot.id, heroIds)}
+                              />
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="draft-sequence-number" aria-label={`Draft row ${index + 1}`}>
+                          {index + 1}
+                        </div>
+                        <div className="draft-sequence-cell second">
+                          {slot.side === "second" ? (
+                            <div
+                              className={`draft-slot-wrapper ${slot.kind} ${targetSlotId === slot.id ? "active" : ""}`}
+                              onClick={() => setTargetSlotId(slot.id)}
+                            >
+                              <DraftSlotCard
+                                slot={slot}
+                                side="second"
+                                heroesById={heroesById}
+                                onOpenPicker={() => {
+                                  setTargetSlotId(slot.id);
+                                  setPickerSlotId(slot.id);
+                                }}
+                                onChange={(heroIds) => updateSlot(slot.id, heroIds)}
+                              />
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="draft-sequence-number" aria-label={`Draft row ${index + 1}`}>
-                        {index + 1}
-                      </div>
-                      <div className="draft-sequence-cell second">
-                        {slot.side === "second" ? (
-                          <div
-                            className={`draft-slot-wrapper ${slot.kind} ${targetSlotId === slot.id ? "active" : ""}`}
-                            onClick={() => setTargetSlotId(slot.id)}
-                          >
-                            <DraftSlotCard
-                              slot={slot}
-                              side="second"
-                              heroesById={heroesById}
-                              onOpenPicker={() => {
-                                setTargetSlotId(slot.id);
-                                setPickerSlotId(slot.id);
-                              }}
-                              onChange={(heroIds) => updateSlot(slot.id, heroIds)}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
+                    );
                   })}
                 </div>
                 <div className="draft-side-shell second">
