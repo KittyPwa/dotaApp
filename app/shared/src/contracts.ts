@@ -300,6 +300,15 @@ export const heroStatSchema = z.object({
   )
 });
 
+export const heroRosterEntrySchema = z.object({
+  heroId: z.number(),
+  heroName: z.string(),
+  heroIconUrl: z.string().nullable(),
+  primaryAttr: z.string().nullable()
+});
+
+export const heroRosterSchema = z.array(heroRosterEntrySchema);
+
 export const heroMatchSummarySchema = z.object({
   matchId: z.number(),
   startTime: z.number().nullable(),
@@ -855,6 +864,8 @@ export const settingsSchema = z.object({
 export type PlayerOverview = z.infer<typeof playerOverviewSchema>;
 export type MatchOverview = z.infer<typeof matchOverviewSchema>;
 export type HeroStat = z.infer<typeof heroStatSchema>;
+export type HeroRosterEntry = z.infer<typeof heroRosterEntrySchema>;
+export type HeroRoster = z.infer<typeof heroRosterSchema>;
 export type HeroOverview = z.infer<typeof heroOverviewSchema>;
 export type LeagueSummary = z.infer<typeof leagueSummarySchema>;
 export type LeagueOverview = z.infer<typeof leagueOverviewSchema>;

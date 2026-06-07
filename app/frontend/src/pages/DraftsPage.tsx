@@ -9,6 +9,7 @@ import {
   useDeleteDraftPlan,
   useDraftContext,
   useDraftPlans,
+  useHeroRoster,
   useHeroStats,
   useLeague,
   useLeagueTeam,
@@ -580,6 +581,7 @@ export function DraftsPage() {
   const saveDraft = useSaveDraftPlan();
   const deleteDraft = useDeleteDraftPlan();
   const heroStats = useHeroStats({ leagueId });
+  const heroRoster = useHeroRoster();
   const selectedDraft = drafts.find((draft) => draft.id === selectedDraftId) ?? null;
   const firstTeam = useLeagueTeam(leagueId, selectedDraft?.firstTeamId ?? null);
   const secondTeam = useLeagueTeam(leagueId, selectedDraft?.secondTeamId ?? null);
@@ -651,19 +653,22 @@ export function DraftsPage() {
       .sort((left, right) => left.leagueName.localeCompare(right.leagueName));
   }, [drafts, settings.data?.savedLeagues]);
   const heroOptions = useMemo<HeroOption[]>(() => {
-    const needle = heroSearch.trim().toLowerCase();
-    return [...(heroStats.data ?? [])]
-      .filter((hero) => !needle || hero.heroName.toLowerCase().includes(needle))
-      .sort((left, right) => right.games - left.games || right.winrate - left.winrate)
-      .map((hero) => ({
-        heroId: hero.heroId,
-        heroName: hero.heroName,
-        heroIconUrl: hero.heroIconUrl,
-        primaryAttr: hero.primaryAttr ?? null,
-        games: hero.games,
-        winrate: hero.winrate
-      }));
-  }, [heroSearch, heroStats.data]);
+    const statsByHeroId = new Map((heroStats.data ?? []).map((hero) => [hero.heroId, hero]));
+    const roster = heroRoster.data?.length ? heroRoster.data : (heroStats.data ?? []);
+    return roster
+      .map((hero) => {
+        const stats = statsByHeroId.get(hero.heroId);
+        return {
+          heroId: hero.heroId,
+          heroName: hero.heroName,
+          heroIconUrl: hero.heroIconUrl,
+          primaryAttr: hero.primaryAttr ?? stats?.primaryAttr ?? null,
+          games: stats?.games ?? 0,
+          winrate: stats?.winrate ?? 0
+        };
+      })
+      .sort((left, right) => right.games - left.games || left.heroName.localeCompare(right.heroName));
+  }, [heroRoster.data, heroStats.data]);
   const heroesById = useMemo(() => new Map(heroOptions.map((hero) => [hero.heroId, hero])), [heroOptions]);
 
   const updateDraft = (draft: DraftPlan) => {
@@ -952,7 +957,9 @@ export function DraftsPage() {
         ) : null}
 
         <section className="draft-main">
-          {league.isLoading || heroStats.isLoading || draftPlans.isLoading ? <LoadingState label="Loading draft context..." /> : null}
+          {league.isLoading || heroStats.isLoading || heroRoster.isLoading || draftPlans.isLoading ? (
+            <LoadingState label="Loading draft context..." />
+          ) : null}
           {newAccessCode ? (
             <div className="draft-access-modal-backdrop" role="presentation">
               <div className="draft-access-modal" role="dialog" aria-modal="true" aria-labelledby="draft-access-title">

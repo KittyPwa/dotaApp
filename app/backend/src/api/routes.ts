@@ -119,6 +119,7 @@ export async function registerRoutes(app: FastifyInstance) {
       sessionSettings: getSessionSettingsOverrides(request)
     });
   });
+  app.get("/api/heroes", async () => service.getHeroRoster());
   app.get("/api/leagues", async () => service.getLeagues());
   app.get("/api/assets/opendota", async (request, reply) => {
     const query = z.object({ path: z.string().min(1) }).parse(request.query);

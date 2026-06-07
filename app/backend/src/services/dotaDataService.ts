@@ -4,6 +4,7 @@ import type {
   CommunityGraph,
   DraftContextResponse,
   HeroOverview,
+  HeroRoster,
   LeagueOverview,
   LeagueSummary,
   LeagueSyncResponse,
@@ -3243,6 +3244,27 @@ export class DotaDataService {
   async getHeroStats(options?: { leagueId?: number | null; sessionSettings?: SessionSettingsOverrides }) {
     const matchScope = await this.getRecentPatchMatchScope(options?.sessionSettings);
     return this.analyticsService.getHeroStats(matchScope ?? undefined, options);
+  }
+
+  async getHeroRoster(): Promise<HeroRoster> {
+    await this.ensureReferenceData();
+    const rows = await db
+      .select({
+        heroId: heroes.id,
+        heroInternalName: heroes.name,
+        heroName: heroes.localizedName,
+        heroIconPath: heroes.iconPath,
+        primaryAttr: heroes.primaryAttr
+      })
+      .from(heroes)
+      .orderBy(heroes.localizedName);
+
+    return rows.map((row) => ({
+      heroId: row.heroId,
+      heroName: row.heroName,
+      heroIconUrl: buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroInternalName)),
+      primaryAttr: row.primaryAttr ?? null
+    }));
   }
 
   async getHeroOverview(

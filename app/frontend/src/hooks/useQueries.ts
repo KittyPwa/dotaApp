@@ -5,6 +5,7 @@ import type {
   DashboardResponse,
   DraftPlanPayload,
   HeroOverview,
+  HeroRoster,
   HeroStat,
   LeagueOverview,
   LeagueSummary,
@@ -102,6 +103,13 @@ export function useHeroStats(filters?: { leagueId?: number | null }) {
   return useQuery({
     queryKey: ["hero-stats", filters?.leagueId ?? null],
     queryFn: () => apiGet<HeroStat[]>(`/api/heroes/stats${suffix ? `?${suffix}` : ""}`)
+  });
+}
+
+export function useHeroRoster() {
+  return useQuery({
+    queryKey: ["hero-roster"],
+    queryFn: () => apiGet<HeroRoster>("/api/heroes")
   });
 }
 
