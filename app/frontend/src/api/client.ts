@@ -269,6 +269,19 @@ export async function apiPost<T>(path: string, body: unknown, init?: { headers?:
   return response.json() as Promise<T>;
 }
 
+export async function apiPatch<T>(path: string, body: unknown, init?: { headers?: HeadersInit }): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: "PATCH",
+    headers: buildHeaders({ "Content-Type": "application/json", ...(init?.headers ?? {}) }),
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(payload?.message ?? `Request failed with ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 export async function apiDelete<T>(path: string, init?: { headers?: HeadersInit }): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
     method: "DELETE",

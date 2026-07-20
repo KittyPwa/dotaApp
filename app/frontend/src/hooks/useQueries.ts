@@ -5,6 +5,7 @@ import type {
   CustomTeamCreateRequest,
   CustomTeamEvaluationsResponse,
   CustomTeamImportRequest,
+  CustomTeamUpdateRequest,
   DraftContextResponse,
   DashboardResponse,
   DraftPlanPayload,
@@ -20,7 +21,7 @@ import type {
   SettingsPayload,
   TeamOverview
 } from "@dota/shared";
-import { apiDelete, apiGet, apiPost, ensureLocalDraftOwnerKey } from "../api/client";
+import { apiDelete, apiGet, apiPatch, apiPost, ensureLocalDraftOwnerKey } from "../api/client";
 
 export type ProviderEnrichmentSummary = {
   counts: Array<{ provider: "stratz" | "opendota_parse"; status: string; count: number }>;
@@ -206,6 +207,19 @@ export function useCreateCustomTeam() {
     mutationFn: (payload: CustomTeamCreateRequest) => apiPost<CustomTeam>("/api/custom-teams", payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["custom-teams"] });
+    }
+  });
+}
+
+export function useUpdateCustomTeam() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ teamId, payload }: { teamId: number; payload: CustomTeamUpdateRequest }) =>
+      apiPatch<CustomTeam>(`/api/custom-teams/${teamId}`, payload),
+    onSuccess: async (team) => {
+      await queryClient.invalidateQueries({ queryKey: ["custom-teams"] });
+      await queryClient.invalidateQueries({ queryKey: ["custom-team-evaluations", team.teamId] });
     }
   });
 }

@@ -770,15 +770,16 @@ export const draftSlotSchema = z.object({
   side: draftSideSchema,
   kind: draftSlotKindSchema,
   label: z.string().min(1),
-  heroIds: z.array(z.number().int().positive())
+  heroIds: z.array(z.number().int().positive()),
+  playerKeysByHero: z.record(z.string(), z.string()).default({})
 });
 
 export const draftPlanSchema = z.object({
   id: z.string().min(1),
   leagueId: z.number().int().positive(),
   name: z.string().min(1).max(120),
-  firstTeamId: z.number().int().positive().nullable(),
-  secondTeamId: z.number().int().positive().nullable(),
+  firstTeamId: z.number().int().nullable(),
+  secondTeamId: z.number().int().nullable(),
   updatedAt: z.number(),
   slots: z.array(draftSlotSchema)
 });
@@ -886,6 +887,11 @@ export const customTeamCreateRequestSchema = z.object({
   tag: z.string().max(24).optional().nullable()
 });
 
+export const customTeamUpdateRequestSchema = z.object({
+  name: z.string().min(1).max(120),
+  tag: z.string().max(24).optional().nullable()
+});
+
 export const settingsSchema = z.object({
   openDotaApiKey: z.string().nullable(),
   stratzApiKey: z.string().nullable(),
@@ -950,3 +956,4 @@ export type CustomTeamHeroEvaluation = z.infer<typeof customTeamHeroEvaluationSc
 export type CustomTeamEvaluationsResponse = z.infer<typeof customTeamEvaluationsResponseSchema>;
 export type CustomTeamImportRequest = z.infer<typeof customTeamImportRequestSchema>;
 export type CustomTeamCreateRequest = z.infer<typeof customTeamCreateRequestSchema>;
+export type CustomTeamUpdateRequest = z.infer<typeof customTeamUpdateRequestSchema>;

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { customTeamCreateRequestSchema, customTeamImportRequestSchema, draftPlanSchema, settingsSchema } from "@dota/shared";
+import {
+  customTeamCreateRequestSchema,
+  customTeamImportRequestSchema,
+  customTeamUpdateRequestSchema,
+  draftPlanSchema,
+  settingsSchema
+} from "@dota/shared";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
@@ -255,6 +261,16 @@ export async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to create custom team." };
+    }
+  });
+
+  app.patch("/api/custom-teams/:teamId", async (request, reply) => {
+    const params = z.object({ teamId: z.coerce.number().int() }).parse(request.params);
+    try {
+      return await service.updateCustomTeam(params.teamId, customTeamUpdateRequestSchema.parse(request.body));
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to update custom team." };
     }
   });
 

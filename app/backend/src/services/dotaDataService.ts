@@ -6,6 +6,7 @@ import type {
   CustomTeamCreateRequest,
   CustomTeamEvaluationsResponse,
   CustomTeamImportRequest,
+  CustomTeamUpdateRequest,
   DraftContextResponse,
   HeroOverview,
   HeroRoster,
@@ -3320,6 +3321,22 @@ export class DotaDataService {
       heroes: 0,
       evaluations: 0
     };
+  }
+
+  async updateCustomTeam(teamId: number, input: CustomTeamUpdateRequest): Promise<CustomTeam> {
+    const name = input.name.trim();
+    const tag = input.tag?.trim() || null;
+    const existing = await this.getCustomTeams();
+    if (!existing.some((team) => team.teamId === teamId && team.isCustom)) {
+      throw new Error("Custom team not found.");
+    }
+    await db
+      .update(teams)
+      .set({ name, tag, updatedAt: new Date() })
+      .where(eq(teams.id, teamId));
+    const updated = (await this.getCustomTeams()).find((team) => team.teamId === teamId);
+    if (!updated) throw new Error("Custom team not found.");
+    return updated;
   }
 
   async importCustomTeamEvaluations(input: CustomTeamImportRequest): Promise<CustomTeamEvaluationsResponse> {

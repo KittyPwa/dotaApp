@@ -7,6 +7,7 @@ export type DraftSlot = {
   kind: DraftSlotKind;
   label: string;
   heroIds: number[];
+  playerKeysByHero: Record<string, string>;
 };
 
 export type DraftPlan = {
@@ -60,7 +61,8 @@ export function createEmptyDraft(leagueId: number, name = "New draft"): DraftPla
     slots: baseDraftOrder.map((slot, index) => ({
       id: `${id}-${index}`,
       ...slot,
-      heroIds: []
+      heroIds: [],
+      playerKeysByHero: {}
     }))
   };
 }
@@ -71,7 +73,8 @@ export function normalizeDraftPlanOrder(draft: DraftPlan): DraftPlan {
     ...draft,
     slots: draft.slots.map((slot, index) => ({
       ...slot,
-      ...baseDraftOrder[index]
+      ...baseDraftOrder[index],
+      playerKeysByHero: slot.playerKeysByHero ?? {}
     }))
   };
 }

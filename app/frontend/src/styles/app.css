@@ -1248,14 +1248,31 @@ tbody tr.league-row-dire {
   background: rgba(51, 211, 153, 0.08);
 }
 
+.draft-team-card.editable label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.draft-team-card.editable input {
+  min-height: 2.25rem;
+}
+
 .draft-team-card span,
 .draft-team-card small {
   color: var(--muted);
 }
 
+.draft-team-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.25rem;
+}
+
 .draft-team-card button {
   justify-self: start;
-  margin-top: 0.25rem;
 }
 
 .draft-access-modal-backdrop {
@@ -2039,6 +2056,7 @@ button.compact {
 }
 
 .draft-picker-hero-grid button {
+  position: relative;
   min-height: 52px;
   padding: 0.2rem;
   border-radius: 10px;
@@ -2312,8 +2330,71 @@ button.compact {
 
 .draft-picker-hero-grid button.evaluated {
   box-shadow:
-    0 0 0 2px rgba(52, 211, 153, 0.5),
-    0 0 18px rgba(52, 211, 153, 0.16);
+    0 0 0 2px color-mix(in srgb, var(--evaluation-color, #33d399) 72%, transparent),
+    0 0 18px color-mix(in srgb, var(--evaluation-color, #33d399) 24%, transparent);
+}
+
+.draft-evaluation-dots {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(7, 13, 22, 0.72);
+}
+
+.draft-evaluation-dots i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.draft-player-assignment {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 1.2rem 1.2rem;
+  padding: 0.9rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 -16px 44px rgba(0, 0, 0, 0.28);
+}
+
+.draft-player-assignment strong,
+.draft-player-assignment small {
+  display: block;
+}
+
+.draft-player-assignment small {
+  color: var(--muted);
+}
+
+.draft-player-assignment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.draft-player-assignment-list button {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  min-height: 2.2rem;
+  padding: 0.35rem 0.65rem;
+  background: var(--soft-bg);
+}
+
+.draft-player-assignment-list button span {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+  background: var(--evaluation-color, #33d399);
 }
 
 :root[data-theme="dark"] .draft-list button,

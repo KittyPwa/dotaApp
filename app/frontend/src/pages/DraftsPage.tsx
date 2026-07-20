@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import type { CustomTeamHeroEvaluation, CustomTeamImportRequest, HeroEvaluationMetrics } from "@dota/shared";
+import type { CustomTeam, CustomTeamHeroEvaluation, CustomTeamImportRequest, HeroEvaluationMetrics } from "@dota/shared";
 import { Card } from "../components/Card";
 import { IconImage } from "../components/IconImage";
 import { Page } from "../components/Page";
@@ -19,7 +20,8 @@ import {
   useLeague,
   useLeagueTeam,
   useSaveDraftPlan,
-  useSettings
+  useSettings,
+  useUpdateCustomTeam
 } from "../hooks/useQueries";
 import {
   createEmptyDraft,
@@ -40,7 +42,19 @@ type HeroOption = {
   winrate: number;
 };
 
-type PickerFilter = "attribute" | "league";
+type PickerFilter = "attribute" | "league" | "suggestion";
+type EvaluationChoice = {
+  playerKey: string;
+  playerName: string;
+  metrics: HeroEvaluationMetrics;
+  color: string;
+};
+type HeroSuggestion = HeroOption & {
+  score: number;
+  metricLabel: string;
+  playerName: string | null;
+  playerKey: string | null;
+};
 type PlayerComfortColumn = {
   playerId: number | null;
   name: string;
@@ -75,6 +89,16 @@ const evaluationMetricKeys: Array<{ key: keyof HeroEvaluationMetrics; label: str
   { key: "buildingDamage", label: "Building" },
   { key: "farmDependency", label: "Farm" }
 ];
+
+const playerColorPalette = ["#33d399", "#f59e0b", "#60a5fa", "#f472b6", "#a78bfa", "#fb7185", "#2dd4bf", "#facc15"];
+
+function playerColorForKey(playerKey: string) {
+  let hash = 0;
+  for (const char of playerKey) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 9973;
+  }
+  return playerColorPalette[hash % playerColorPalette.length];
+}
 
 function getTeamName(teams: DraftTeamOption[], teamId: number | null) {
   if (!teamId) return null;
@@ -139,11 +163,34 @@ function parseCsvRows(text: string): Record<string, string>[] {
   );
 }
 
-function sumEvaluationMetrics(evaluations: CustomTeamHeroEvaluation[], heroIds: number[]) {
-  const uniqueHeroIds = [...new Set(heroIds)];
-  const selected = uniqueHeroIds
-    .map((heroId) => evaluations.find((entry) => entry.heroId === heroId))
-    .filter((entry): entry is CustomTeamHeroEvaluation => Boolean(entry));
+function evaluationChoicesByHero(evaluations: CustomTeamHeroEvaluation[]) {
+  const byHero = new Map<number, EvaluationChoice[]>();
+  for (const evaluation of evaluations) {
+    if (evaluation.heroId === null) continue;
+    const list = byHero.get(evaluation.heroId) ?? [];
+    list.push({
+      playerKey: evaluation.playerKey,
+      playerName: evaluation.pseudonym,
+      metrics: evaluation.metrics,
+      color: playerColorForKey(evaluation.playerKey)
+    });
+    byHero.set(evaluation.heroId, list);
+  }
+  return byHero;
+}
+
+function sumEvaluationMetrics(
+  evaluations: CustomTeamHeroEvaluation[],
+  selectedHeroes: Array<{ heroId: number; playerKey: string | null }>
+) {
+  const byHero = evaluationChoicesByHero(evaluations);
+  const selected = selectedHeroes
+    .map(({ heroId, playerKey }) => {
+      const choices = byHero.get(heroId) ?? [];
+      if (choices.length === 1) return choices[0];
+      return playerKey ? choices.find((choice) => choice.playerKey === playerKey) ?? null : null;
+    })
+    .filter((entry): entry is EvaluationChoice => Boolean(entry));
   if (!selected.length) return null;
   const totals = Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, 0])) as Record<keyof HeroEvaluationMetrics, number>;
   for (const evaluation of selected) {
@@ -152,6 +199,36 @@ function sumEvaluationMetrics(evaluations: CustomTeamHeroEvaluation[], heroIds: 
     }
   }
   return Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, Number(totals[key].toFixed(1))])) as HeroEvaluationMetrics;
+}
+
+function buildEvaluationSuggestions(
+  heroOptions: HeroOption[],
+  evaluations: CustomTeamHeroEvaluation[],
+  currentMetrics: HeroEvaluationMetrics | null,
+  heroDraftState: Map<number, HeroDraftState>
+): HeroSuggestion[] {
+  const missingMetric =
+    evaluationMetricKeys
+      .map((metric) => ({ ...metric, value: currentMetrics?.[metric.key] ?? 0 }))
+      .sort((left, right) => left.value - right.value)[0] ?? evaluationMetricKeys[0];
+  const choices = evaluationChoicesByHero(evaluations);
+  return heroOptions
+    .map((hero) => {
+      if (heroDraftState.has(hero.heroId)) return null;
+      const heroChoices = choices.get(hero.heroId) ?? [];
+      if (!heroChoices.length) return null;
+      const best = [...heroChoices].sort((left, right) => right.metrics[missingMetric.key] - left.metrics[missingMetric.key])[0];
+      return {
+        ...hero,
+        score: best.metrics[missingMetric.key],
+        metricLabel: missingMetric.label,
+        playerName: heroChoices.length > 1 ? best.playerName : null,
+        playerKey: heroChoices.length > 1 ? best.playerKey : null
+      };
+    })
+    .filter((entry): entry is HeroSuggestion => Boolean(entry))
+    .sort((left, right) => right.score - left.score || right.games - left.games || left.heroName.localeCompare(right.heroName))
+    .slice(0, 36);
 }
 
 function evaluationHeroOptions(evaluations: CustomTeamHeroEvaluation[], heroesById: Map<number, HeroOption>): HeroOption[] {
@@ -495,7 +572,8 @@ function HeroPickerModal({
   heroOptions,
   currentSlotHeroIds,
   heroDraftState,
-  evaluatedHeroIds,
+  evaluatedHeroes,
+  suggestions,
   onClose,
   onPick
 }: {
@@ -504,15 +582,18 @@ function HeroPickerModal({
   heroOptions: HeroOption[];
   currentSlotHeroIds: Set<number>;
   heroDraftState: Map<number, HeroDraftState>;
-  evaluatedHeroIds: Set<number>;
+  evaluatedHeroes: Map<number, EvaluationChoice[]>;
+  suggestions: HeroSuggestion[];
   onClose: () => void;
-  onPick: (heroId: number) => void;
+  onPick: (heroId: number, playerKey?: string | null) => void;
 }) {
   const [filter, setFilter] = useState<PickerFilter>("attribute");
   const [search, setSearch] = useState("");
+  const [pendingHero, setPendingHero] = useState<HeroOption | null>(null);
   if (!open || !slot) return null;
 
   const searchedHeroes = heroOptions.filter((hero) => hero.heroName.toLowerCase().includes(search.trim().toLowerCase()));
+  const searchedSuggestions = suggestions.filter((hero) => hero.heroName.toLowerCase().includes(search.trim().toLowerCase()));
   const attrGroups = ["Strength", "Agility", "Intelligence", "Universal"].map((label) => ({
     label,
     heroes: searchedHeroes.filter((hero) => normalizeAttr(hero.primaryAttr) === label)
@@ -520,12 +601,32 @@ function HeroPickerModal({
   const groups =
     filter === "attribute"
       ? attrGroups
-      : [
+      : filter === "suggestion"
+        ? [
+            {
+              label: searchedSuggestions[0]?.metricLabel ? `Needs ${searchedSuggestions[0].metricLabel}` : "Suggestions",
+              heroes: searchedSuggestions
+            }
+          ]
+        : [
           {
             label: "League pick rate",
             heroes: searchedHeroes
           }
         ];
+  const pickHero = (hero: HeroOption) => {
+    const choices = evaluatedHeroes.get(hero.heroId) ?? [];
+    if (slot.kind === "pick" && !currentSlotHeroIds.has(hero.heroId) && choices.length > 1) {
+      setPendingHero(hero);
+      return;
+    }
+    onPick(hero.heroId, choices.length === 1 ? choices[0].playerKey : null);
+  };
+  const heroStyle = (heroId: number) => {
+    const choices = evaluatedHeroes.get(heroId) ?? [];
+    if (!choices.length) return undefined;
+    return { "--evaluation-color": choices[0].color } as CSSProperties;
+  };
 
   return (
     <div className="draft-picker-backdrop" role="presentation" onClick={onClose}>
@@ -546,7 +647,8 @@ function HeroPickerModal({
           <div className="segmented-control">
             {[
               ["attribute", "Attributes"],
-              ["league", "League"]
+              ["league", "League"],
+              ["suggestion", "Suggestion"]
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -559,7 +661,7 @@ function HeroPickerModal({
             ))}
           </div>
         </div>
-        <div className={`draft-picker-groups ${filter === "league" ? "full-width" : ""}`}>
+        <div className={`draft-picker-groups ${filter !== "attribute" ? "full-width" : ""}`}>
           {groups.map((group) => (
             <section key={group.label} className="draft-picker-group">
               <h3>{group.label}</h3>
@@ -568,17 +670,52 @@ function HeroPickerModal({
                   <button
                     key={hero.heroId}
                     type="button"
-                    className={heroButtonClass(hero.heroId, currentSlotHeroIds, heroDraftState, false, evaluatedHeroIds.has(hero.heroId))}
+                    className={heroButtonClass(hero.heroId, currentSlotHeroIds, heroDraftState, filter === "suggestion", evaluatedHeroes.has(hero.heroId))}
+                    style={heroStyle(hero.heroId)}
                     title={`${hero.heroName} | ${formatNumber(hero.games)} games | ${hero.winrate}%`}
-                    onClick={() => onPick(hero.heroId)}
+                    onClick={() => pickHero(hero)}
                   >
                     <IconImage src={hero.heroIconUrl} alt={hero.heroName} size="md" />
+                    {(evaluatedHeroes.get(hero.heroId) ?? []).length > 1 ? (
+                      <span className="draft-evaluation-dots">
+                        {(evaluatedHeroes.get(hero.heroId) ?? []).slice(0, 4).map((choice) => (
+                          <i key={choice.playerKey} style={{ background: choice.color }} />
+                        ))}
+                      </span>
+                    ) : null}
                   </button>
                 ))}
               </div>
             </section>
           ))}
         </div>
+        {pendingHero ? (
+          <div className="draft-player-assignment" role="dialog" aria-modal="true" aria-label="Assign player">
+            <div>
+              <strong>Assign {pendingHero.heroName}</strong>
+              <small>Choose which player row should count for this pick.</small>
+            </div>
+            <div className="draft-player-assignment-list">
+              {(evaluatedHeroes.get(pendingHero.heroId) ?? []).map((choice) => (
+                <button
+                  key={choice.playerKey}
+                  type="button"
+                  style={{ "--evaluation-color": choice.color } as CSSProperties}
+                  onClick={() => {
+                    onPick(pendingHero.heroId, choice.playerKey);
+                    setPendingHero(null);
+                  }}
+                >
+                  <span />
+                  {choice.playerName}
+                </button>
+              ))}
+            </div>
+            <button type="button" className="ghost-button compact" onClick={() => setPendingHero(null)}>
+              Cancel
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -722,6 +859,57 @@ function DraftLeagueLibrarySection({
   );
 }
 
+function CustomTeamCard({
+  team,
+  saving,
+  onSave,
+  onDraft
+}: {
+  team: CustomTeam;
+  saving: boolean;
+  onSave: (teamId: number, values: { name: string; tag: string | null }) => void;
+  onDraft: (teamId: number) => void;
+}) {
+  const [name, setName] = useState(team.name);
+  const [tag, setTag] = useState(team.tag ?? "");
+
+  useEffect(() => {
+    setName(team.name);
+    setTag(team.tag ?? "");
+  }, [team.name, team.tag]);
+
+  const changed = name.trim() !== team.name || (tag.trim() || null) !== team.tag;
+
+  return (
+    <article className="draft-team-card custom editable">
+      <label>
+        Name
+        <input value={name} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label>
+        Tag
+        <input value={tag} onChange={(event) => setTag(event.target.value)} placeholder="Optional" />
+      </label>
+      <small>
+        {formatNumber(team.evaluations)} evaluations · {formatNumber(team.heroes)} heroes · {formatNumber(team.players)} players
+      </small>
+      <div className="draft-team-card-actions">
+        <button
+          type="button"
+          className="ghost-button compact"
+          onClick={() => onSave(team.teamId, { name: name.trim(), tag: tag.trim() || null })}
+          disabled={!name.trim() || !changed || saving}
+        >
+          Save
+        </button>
+        <button type="button" className="ghost-button compact" onClick={() => onDraft(team.teamId)}>
+          Draft with team
+        </button>
+      </div>
+    </article>
+  );
+}
+
 export function DraftsPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -751,6 +939,7 @@ export function DraftsPage() {
   const heroRoster = useHeroRoster();
   const customTeams = useCustomTeams();
   const createCustomTeam = useCreateCustomTeam();
+  const updateCustomTeam = useUpdateCustomTeam();
   const importCustomTeam = useImportCustomTeamEvaluations();
   const selectedDraft = drafts.find((draft) => draft.id === selectedDraftId) ?? null;
   const customTeamIds = useMemo(() => new Set((customTeams.data ?? []).map((team) => team.teamId)), [customTeams.data]);
@@ -969,11 +1158,18 @@ export function DraftsPage() {
     }
   };
 
-  const updateSlot = (slotId: string, heroIds: number[]) => {
+  const updateSlot = (slotId: string, heroIds: number[], playerKeysByHero?: Record<string, string>) => {
     if (!selectedDraft) return;
     updateDraft({
       ...selectedDraft,
-      slots: selectedDraft.slots.map((slot) => (slot.id === slotId ? { ...slot, heroIds } : slot))
+      slots: selectedDraft.slots.map((slot) => {
+        if (slot.id !== slotId) return slot;
+        const allowedHeroIds = new Set(heroIds.map(String));
+        const nextPlayerKeys = Object.fromEntries(
+          Object.entries(playerKeysByHero ?? slot.playerKeysByHero ?? {}).filter(([heroId]) => allowedHeroIds.has(heroId))
+        );
+        return { ...slot, heroIds, playerKeysByHero: nextPlayerKeys };
+      })
     });
   };
 
@@ -1147,30 +1343,50 @@ export function DraftsPage() {
     ];
   }, [draftContext.data?.combos, firstTeam.data?.players, heroesById, league.data?.matchPlayers, secondTeam.data?.players]);
   const currentSlotHeroIds = useMemo(() => new Set(pickerSlot?.heroIds ?? []), [pickerSlot?.heroIds]);
-  const firstEvaluatedHeroIds = useMemo(
-    () => new Set((firstTeamEvaluations.data?.evaluations ?? []).map((entry) => entry.heroId).filter((id): id is number => id !== null)),
+  const firstEvaluatedHeroes = useMemo(
+    () => evaluationChoicesByHero(firstTeamEvaluations.data?.evaluations ?? []),
     [firstTeamEvaluations.data?.evaluations]
   );
-  const secondEvaluatedHeroIds = useMemo(
-    () => new Set((secondTeamEvaluations.data?.evaluations ?? []).map((entry) => entry.heroId).filter((id): id is number => id !== null)),
+  const secondEvaluatedHeroes = useMemo(
+    () => evaluationChoicesByHero(secondTeamEvaluations.data?.evaluations ?? []),
     [secondTeamEvaluations.data?.evaluations]
   );
-  const pickerEvaluatedHeroIds = pickerSlot?.side === "second" ? secondEvaluatedHeroIds : firstEvaluatedHeroIds;
-  const pickedHeroIdsBySide = useMemo(() => {
-    const bySide: Record<DraftSide, number[]> = { first: [], second: [] };
+  const pickerEvaluatedHeroes = pickerSlot?.side === "second" ? secondEvaluatedHeroes : firstEvaluatedHeroes;
+  const pickedHeroesBySide = useMemo(() => {
+    const bySide: Record<DraftSide, Array<{ heroId: number; playerKey: string | null }>> = { first: [], second: [] };
     for (const slot of selectedDraft?.slots ?? []) {
       if (slot.kind !== "pick") continue;
-      bySide[slot.side].push(...slot.heroIds);
+      bySide[slot.side].push(
+        ...slot.heroIds.map((heroId) => ({
+          heroId,
+          playerKey: slot.playerKeysByHero?.[String(heroId)] ?? null
+        }))
+      );
     }
     return bySide;
   }, [selectedDraft?.slots]);
   const firstEvaluationMetrics = useMemo(
-    () => sumEvaluationMetrics(firstTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.first),
-    [firstTeamEvaluations.data?.evaluations, pickedHeroIdsBySide.first]
+    () => sumEvaluationMetrics(firstTeamEvaluations.data?.evaluations ?? [], pickedHeroesBySide.first),
+    [firstTeamEvaluations.data?.evaluations, pickedHeroesBySide.first]
   );
   const secondEvaluationMetrics = useMemo(
-    () => sumEvaluationMetrics(secondTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.second),
-    [pickedHeroIdsBySide.second, secondTeamEvaluations.data?.evaluations]
+    () => sumEvaluationMetrics(secondTeamEvaluations.data?.evaluations ?? [], pickedHeroesBySide.second),
+    [pickedHeroesBySide.second, secondTeamEvaluations.data?.evaluations]
+  );
+  const pickerSuggestions = useMemo(
+    () =>
+      pickerSlot?.side === "second"
+        ? buildEvaluationSuggestions(heroOptions, secondTeamEvaluations.data?.evaluations ?? [], secondEvaluationMetrics, heroDraftState)
+        : buildEvaluationSuggestions(heroOptions, firstTeamEvaluations.data?.evaluations ?? [], firstEvaluationMetrics, heroDraftState),
+    [
+      firstEvaluationMetrics,
+      firstTeamEvaluations.data?.evaluations,
+      heroDraftState,
+      heroOptions,
+      pickerSlot?.side,
+      secondEvaluationMetrics,
+      secondTeamEvaluations.data?.evaluations
+    ]
   );
 
   return (
@@ -1269,15 +1485,19 @@ export function DraftsPage() {
                 heroOptions={heroOptions}
                 currentSlotHeroIds={currentSlotHeroIds}
                 heroDraftState={heroDraftState}
-                evaluatedHeroIds={pickerEvaluatedHeroIds}
+                evaluatedHeroes={pickerEvaluatedHeroes}
+                suggestions={pickerSuggestions}
                 onClose={() => setPickerSlotId(null)}
-                onPick={(heroId) => {
+                onPick={(heroId, playerKey) => {
                   if (!pickerSlot) return;
                   if (pickerSlot.heroIds.includes(heroId)) {
                     updateSlot(pickerSlot.id, pickerSlot.heroIds.filter((entry) => entry !== heroId));
                     return;
                   }
-                  updateSlot(pickerSlot.id, [...pickerSlot.heroIds, heroId]);
+                  updateSlot(pickerSlot.id, [...pickerSlot.heroIds, heroId], {
+                    ...(pickerSlot.playerKeysByHero ?? {}),
+                    ...(playerKey ? { [String(heroId)]: playerKey } : {})
+                  });
                 }}
               />
 
@@ -1497,17 +1717,22 @@ export function DraftsPage() {
                     <h3>Custom teams</h3>
                     <div className="draft-team-grid">
                       {(customTeams.data ?? []).map((team) => (
-                        <article key={team.teamId} className="draft-team-card custom">
-                          <strong>{team.name}</strong>
-                          <span>{team.tag ?? "Custom"}</span>
-                          <small>
-                            {formatNumber(team.evaluations)} evaluations · {formatNumber(team.heroes)} heroes ·{" "}
-                            {formatNumber(team.players)} players
-                          </small>
-                          <button type="button" className="ghost-button compact" onClick={() => void createDraft({ firstTeamId: team.teamId })}>
-                            Draft with team
-                          </button>
-                        </article>
+                        <CustomTeamCard
+                          key={team.teamId}
+                          team={team}
+                          saving={updateCustomTeam.isPending}
+                          onSave={(teamId, values) => {
+                            void updateCustomTeam
+                              .mutateAsync({ teamId, payload: values })
+                              .then((updated) => {
+                                setTeamImportMessage(`Updated ${updated.name}.`);
+                              })
+                              .catch((error) => {
+                                setTeamImportMessage(error instanceof Error ? error.message : "Failed to update team.");
+                              });
+                          }}
+                          onDraft={(teamId) => void createDraft({ firstTeamId: teamId })}
+                        />
                       ))}
                     </div>
                   </section>
