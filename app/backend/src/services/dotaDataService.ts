@@ -2,6 +2,9 @@ import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type {
   CommunityGraph,
+  CustomTeam,
+  CustomTeamEvaluationsResponse,
+  CustomTeamImportRequest,
   DraftContextResponse,
   HeroOverview,
   HeroRoster,
@@ -30,6 +33,7 @@ import {
   players,
   providerEnrichmentQueue,
   rawApiPayloads,
+  customTeamHeroEvaluations,
   teams
 } from "../db/schema.js";
 import { config } from "../utils/config.js";
@@ -131,6 +135,15 @@ function normalizeAbilityUpgrades(player: {
 
 function defaultAbilityImagePath(abilityName: string) {
   return `/apps/dota2/images/dota_react/abilities/${abilityName}.png`;
+}
+
+function normalizeHeroSlug(value: string) {
+  return value
+    .replace(/^npc_dota_hero_/i, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 export class DotaDataService {
@@ -3265,6 +3278,160 @@ export class DotaDataService {
       heroIconUrl: buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroInternalName)),
       primaryAttr: row.primaryAttr ?? null
     }));
+  }
+
+  async getCustomTeams(): Promise<CustomTeam[]> {
+    const rows = sqliteDb
+      .prepare(
+        `
+          select
+            t.id as teamId,
+            t.name as name,
+            t.tag as tag,
+            count(e.id) as evaluations,
+            count(distinct e.player_key) as players,
+            count(distinct coalesce(e.hero_id, e.hero_slug)) as heroes
+          from teams t
+          left join custom_team_hero_evaluations e on e.team_id = t.id
+          where t.id < 0 or e.id is not null
+          group by t.id, t.name, t.tag
+          order by lower(t.name)
+        `
+      )
+      .all() as Array<{ teamId: number; name: string; tag: string | null; evaluations: number; players: number; heroes: number }>;
+
+    return rows.map((row) => ({ ...row, isCustom: row.teamId < 0 }));
+  }
+
+  async importCustomTeamEvaluations(input: CustomTeamImportRequest): Promise<CustomTeamEvaluationsResponse> {
+    await this.ensureReferenceData();
+    const now = new Date();
+    const teamId = input.teamId ?? -Date.now();
+    await db
+      .insert(teams)
+      .values({ id: teamId, name: input.name.trim(), tag: input.tag?.trim() || null, updatedAt: now })
+      .onConflictDoUpdate({
+        target: teams.id,
+        set: { name: input.name.trim(), tag: input.tag?.trim() || null, updatedAt: now }
+      });
+
+    const heroRows = await db
+      .select({ id: heroes.id, name: heroes.name, localizedName: heroes.localizedName })
+      .from(heroes);
+    const heroIdBySlug = new Map<string, number>();
+    for (const hero of heroRows) {
+      heroIdBySlug.set(normalizeHeroSlug(hero.name), hero.id);
+      heroIdBySlug.set(normalizeHeroSlug(hero.localizedName), hero.id);
+    }
+    heroIdBySlug.set("furion", heroIdBySlug.get("nature_s_prophet") ?? heroIdBySlug.get("natures_prophet") ?? 53);
+
+    for (const row of input.rows) {
+      const heroSlug = normalizeHeroSlug(row.hero_id);
+      const playerKey = (row.player_id || row.steam_id || row.pseudonym).trim();
+      await db
+        .insert(customTeamHeroEvaluations)
+        .values({
+          teamId,
+          playerKey,
+          steamId: row.steam_id?.trim() || null,
+          pseudonym: row.pseudonym.trim(),
+          heroSlug,
+          heroId: heroIdBySlug.get(heroSlug) ?? null,
+          save: row.save,
+          control: row.control,
+          enabler: row.enabler,
+          mobility: row.mobility,
+          teamfight: row.teamfight,
+          initiation: row.initiation,
+          heroDamage: row.hero_damage,
+          buildingDamage: row.building_damage,
+          farmDependency: row.farm_dependency,
+          updatedAt: now
+        })
+        .onConflictDoUpdate({
+          target: [
+            customTeamHeroEvaluations.teamId,
+            customTeamHeroEvaluations.playerKey,
+            customTeamHeroEvaluations.heroSlug
+          ],
+          set: {
+            steamId: row.steam_id?.trim() || null,
+            pseudonym: row.pseudonym.trim(),
+            heroId: heroIdBySlug.get(heroSlug) ?? null,
+            save: row.save,
+            control: row.control,
+            enabler: row.enabler,
+            mobility: row.mobility,
+            teamfight: row.teamfight,
+            initiation: row.initiation,
+            heroDamage: row.hero_damage,
+            buildingDamage: row.building_damage,
+            farmDependency: row.farm_dependency,
+            updatedAt: now
+          }
+        });
+    }
+
+    return this.getCustomTeamEvaluations(teamId);
+  }
+
+  async getCustomTeamEvaluations(teamId: number): Promise<CustomTeamEvaluationsResponse> {
+    const [team] = await this.getCustomTeams().then((list) => [list.find((entry) => entry.teamId === teamId)]);
+    if (!team) {
+      throw new Error("Custom team not found.");
+    }
+    const rows = await db
+      .select({
+        teamId: customTeamHeroEvaluations.teamId,
+        playerKey: customTeamHeroEvaluations.playerKey,
+        steamId: customTeamHeroEvaluations.steamId,
+        pseudonym: customTeamHeroEvaluations.pseudonym,
+        heroSlug: customTeamHeroEvaluations.heroSlug,
+        heroId: customTeamHeroEvaluations.heroId,
+        heroName: heroes.localizedName,
+        heroInternalName: heroes.name,
+        heroIconPath: heroes.iconPath,
+        save: customTeamHeroEvaluations.save,
+        control: customTeamHeroEvaluations.control,
+        enabler: customTeamHeroEvaluations.enabler,
+        mobility: customTeamHeroEvaluations.mobility,
+        teamfight: customTeamHeroEvaluations.teamfight,
+        initiation: customTeamHeroEvaluations.initiation,
+        heroDamage: customTeamHeroEvaluations.heroDamage,
+        buildingDamage: customTeamHeroEvaluations.buildingDamage,
+        farmDependency: customTeamHeroEvaluations.farmDependency
+      })
+      .from(customTeamHeroEvaluations)
+      .leftJoin(heroes, eq(heroes.id, customTeamHeroEvaluations.heroId))
+      .where(eq(customTeamHeroEvaluations.teamId, teamId));
+
+    return {
+      team,
+      evaluations: rows.map((row) => ({
+        teamId: row.teamId,
+        playerKey: row.playerKey,
+        steamId: row.steamId,
+        pseudonym: row.pseudonym,
+        heroSlug: row.heroSlug,
+        heroId: row.heroId,
+        heroName: row.heroName ?? row.heroSlug.replace(/_/g, " "),
+        heroIconUrl:
+          row.heroId && row.heroInternalName
+            ? buildAssetProxyUrl(row.heroIconPath ?? defaultHeroIconPath(row.heroInternalName))
+            : null,
+        metrics: {
+          save: row.save,
+          control: row.control,
+          enabler: row.enabler,
+          mobility: row.mobility,
+          teamfight: row.teamfight,
+          initiation: row.initiation,
+          heroDamage: row.heroDamage,
+          buildingDamage: row.buildingDamage,
+          farmDependency: row.farmDependency
+        }
+      }))
+    };
   }
 
   async getHeroOverview(

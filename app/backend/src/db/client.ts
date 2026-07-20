@@ -77,6 +77,30 @@ export function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS draft_plans_owner_league_idx
       ON draft_plans(owner_key, league_id);
+    CREATE TABLE IF NOT EXISTS custom_team_hero_evaluations (
+      id integer primary key autoincrement,
+      team_id integer not null references teams(id) on delete cascade,
+      player_key text not null,
+      steam_id text,
+      pseudonym text not null,
+      hero_slug text not null,
+      hero_id integer references heroes(id) on delete set null,
+      save integer not null default 0,
+      control integer not null default 0,
+      enabler integer not null default 0,
+      mobility integer not null default 0,
+      teamfight integer not null default 0,
+      initiation integer not null default 0,
+      hero_damage integer not null default 0,
+      building_damage integer not null default 0,
+      farm_dependency integer not null default 0,
+      created_at integer not null default (unixepoch() * 1000),
+      updated_at integer not null default (unixepoch() * 1000)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS custom_team_hero_evaluations_team_player_hero_unique
+      ON custom_team_hero_evaluations(team_id, player_key, hero_slug);
+    CREATE INDEX IF NOT EXISTS custom_team_hero_evaluations_team_hero_idx
+      ON custom_team_hero_evaluations(team_id, hero_id);
     CREATE TABLE IF NOT EXISTS provider_enrichment_queue (
       id integer primary key autoincrement,
       match_id integer not null references matches(id) on delete cascade,

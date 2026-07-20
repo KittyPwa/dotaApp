@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { draftPlanSchema, settingsSchema } from "@dota/shared";
+import { customTeamImportRequestSchema, draftPlanSchema, settingsSchema } from "@dota/shared";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
@@ -237,6 +237,34 @@ export async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to load draft context." };
+    }
+  });
+
+  app.get("/api/custom-teams", async (_request, reply) => {
+    try {
+      return await service.getCustomTeams();
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to load custom teams." };
+    }
+  });
+
+  app.get("/api/custom-teams/:teamId/evaluations", async (request, reply) => {
+    const params = z.object({ teamId: z.coerce.number().int() }).parse(request.params);
+    try {
+      return await service.getCustomTeamEvaluations(params.teamId);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to load team evaluations." };
+    }
+  });
+
+  app.post("/api/custom-teams/import-evaluations", async (request, reply) => {
+    try {
+      return await service.importCustomTeamEvaluations(customTeamImportRequestSchema.parse(request.body));
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to import team evaluations." };
     }
   });
 

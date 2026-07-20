@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
+import type { CustomTeamHeroEvaluation, CustomTeamImportRequest, HeroEvaluationMetrics } from "@dota/shared";
 import { Card } from "../components/Card";
 import { IconImage } from "../components/IconImage";
 import { Page } from "../components/Page";
 import { EmptyState, LoadingState } from "../components/State";
 import {
   useDeleteDraftPlan,
+  useCustomTeamEvaluations,
+  useCustomTeams,
   useDraftContext,
   useDraftPlans,
   useHeroRoster,
   useHeroStats,
+  useImportCustomTeamEvaluations,
   useLeague,
   useLeagueTeam,
   useSaveDraftPlan,
@@ -57,14 +61,27 @@ type DraftLibraryGroup = {
   title: string;
   drafts: Array<{ draft: DraftPlan; matchup: string }>;
 };
+type DraftTeamOption = { teamId: number; name: string; tag: string | null; isCustom?: boolean };
 
-function getTeamName(teams: Array<{ teamId: number; name: string; tag: string | null }>, teamId: number | null) {
+const evaluationMetricKeys: Array<{ key: keyof HeroEvaluationMetrics; label: string }> = [
+  { key: "save", label: "Save" },
+  { key: "control", label: "Control" },
+  { key: "enabler", label: "Enable" },
+  { key: "mobility", label: "Mobility" },
+  { key: "teamfight", label: "Fight" },
+  { key: "initiation", label: "Init" },
+  { key: "heroDamage", label: "Hero dmg" },
+  { key: "buildingDamage", label: "Building" },
+  { key: "farmDependency", label: "Farm" }
+];
+
+function getTeamName(teams: DraftTeamOption[], teamId: number | null) {
   if (!teamId) return null;
   const team = teams.find((entry) => entry.teamId === teamId);
-  return team ? `${team.name}${team.tag ? ` (${team.tag})` : ""}` : `Team ${teamId}`;
+  return team ? `${team.name}${team.tag ? ` (${team.tag})` : ""}${team.isCustom ? " - custom" : ""}` : `Team ${teamId}`;
 }
 
-function groupDraftsByTeam(drafts: DraftPlan[], teams: Array<{ teamId: number; name: string; tag: string | null }>) {
+function groupDraftsByTeam(drafts: DraftPlan[], teams: DraftTeamOption[]) {
   const groups = new Map<string, DraftLibraryGroup>();
   const ensureGroup = (key: string, title: string) => {
     const existing = groups.get(key);
@@ -84,6 +101,97 @@ function groupDraftsByTeam(drafts: DraftPlan[], teams: Array<{ teamId: number; n
   }
 
   return [...groups.values()].sort((left, right) => left.title.localeCompare(right.title));
+}
+
+function parseCsvRows(text: string): Record<string, string>[] {
+  const rows: string[][] = [];
+  let field = "";
+  let row: string[] = [];
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      field += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(field);
+      field = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(field);
+      if (row.some((cell) => cell.trim())) rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += char;
+    }
+  }
+  row.push(field);
+  if (row.some((cell) => cell.trim())) rows.push(row);
+  const [headers, ...body] = rows;
+  if (!headers) return [];
+  return body.map((cells) =>
+    Object.fromEntries(headers.map((header, index) => [header.trim(), cells[index]?.trim() ?? ""]))
+  );
+}
+
+function averageEvaluationMetrics(evaluations: CustomTeamHeroEvaluation[], heroIds: number[]) {
+  const selected = evaluations.filter((entry) => entry.heroId !== null && heroIds.includes(entry.heroId));
+  if (!selected.length) return null;
+  const totals = Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, 0])) as Record<keyof HeroEvaluationMetrics, number>;
+  for (const evaluation of selected) {
+    for (const { key } of evaluationMetricKeys) {
+      totals[key] += evaluation.metrics[key];
+    }
+  }
+  return Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, Number((totals[key] / selected.length).toFixed(1))])) as HeroEvaluationMetrics;
+}
+
+function evaluationHeroOptions(evaluations: CustomTeamHeroEvaluation[], heroesById: Map<number, HeroOption>): HeroOption[] {
+  const byHero = new Map<number, { evaluation: CustomTeamHeroEvaluation; count: number }>();
+  for (const evaluation of evaluations) {
+    if (evaluation.heroId === null) continue;
+    const current = byHero.get(evaluation.heroId) ?? { evaluation, count: 0 };
+    current.count += 1;
+    byHero.set(evaluation.heroId, current);
+  }
+  return [...byHero.entries()]
+    .map(([heroId, entry]) => ({
+      heroId,
+      heroName: heroesById.get(heroId)?.heroName ?? entry.evaluation.heroName,
+      heroIconUrl: heroesById.get(heroId)?.heroIconUrl ?? entry.evaluation.heroIconUrl,
+      primaryAttr: heroesById.get(heroId)?.primaryAttr ?? null,
+      games: entry.count,
+      winrate: 0
+    }))
+    .sort((left, right) => right.games - left.games || left.heroName.localeCompare(right.heroName));
+}
+
+function normalizeImportRows(rows: Record<string, string>[]): CustomTeamImportRequest["rows"] {
+  const numberValue = (row: Record<string, string>, key: string) => {
+    const value = Number(row[key] ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  };
+  return rows
+    .filter((row) => row.pseudonym?.trim() && row.hero_id?.trim())
+    .map((row) => ({
+      player_id: row.player_id?.trim() || null,
+      steam_id: row.steam_id?.trim() || null,
+      pseudonym: row.pseudonym.trim(),
+      hero_id: row.hero_id.trim(),
+      save: numberValue(row, "save"),
+      control: numberValue(row, "control"),
+      enabler: numberValue(row, "enabler"),
+      mobility: numberValue(row, "mobility"),
+      teamfight: numberValue(row, "teamfight"),
+      initiation: numberValue(row, "initiation"),
+      hero_damage: numberValue(row, "hero_damage"),
+      building_damage: numberValue(row, "building_damage"),
+      farm_dependency: numberValue(row, "farm_dependency")
+    }));
 }
 
 function DraftHeroChip({
@@ -148,16 +256,65 @@ function heroButtonClass(
   heroId: number,
   currentSlotHeroIds: Set<number>,
   heroDraftState: Map<number, HeroDraftState>,
-  recommended = false
+  recommended = false,
+  evaluated = false
 ) {
   return [
     currentSlotHeroIds.has(heroId) ? "current" : "",
     !currentSlotHeroIds.has(heroId) && heroDraftState.get(heroId) === "ban" ? "banned" : "",
     !currentSlotHeroIds.has(heroId) && heroDraftState.get(heroId) === "pick" ? "picked" : "",
-    recommended ? "recommended" : ""
+    recommended ? "recommended" : "",
+    evaluated ? "evaluated" : ""
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function EvaluationRadar({ title, metrics, emptyLabel }: { title: string; metrics: HeroEvaluationMetrics | null; emptyLabel: string }) {
+  if (!metrics) {
+    return (
+      <div className="draft-evaluation-card">
+        <strong>{title}</strong>
+        <small>{emptyLabel}</small>
+      </div>
+    );
+  }
+  const center = 50;
+  const radius = 36;
+  const points = evaluationMetricKeys
+    .map(({ key }, index) => {
+      const angle = -Math.PI / 2 + (Math.PI * 2 * index) / evaluationMetricKeys.length;
+      const valueRadius = radius * Math.max(0, Math.min(5, metrics[key])) / 5;
+      return `${center + Math.cos(angle) * valueRadius},${center + Math.sin(angle) * valueRadius}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="draft-evaluation-card">
+      <strong>{title}</strong>
+      <svg className="draft-evaluation-radar" viewBox="0 0 100 100" role="img" aria-label={`${title} evaluation radar`}>
+        {[1, 2, 3, 4, 5].map((step) => {
+          const gridRadius = (radius * step) / 5;
+          const gridPoints = evaluationMetricKeys
+            .map((_, index) => {
+              const angle = -Math.PI / 2 + (Math.PI * 2 * index) / evaluationMetricKeys.length;
+              return `${center + Math.cos(angle) * gridRadius},${center + Math.sin(angle) * gridRadius}`;
+            })
+            .join(" ");
+          return <polygon key={step} points={gridPoints} className="radar-grid" />;
+        })}
+        {evaluationMetricKeys.map(({ label }, index) => {
+          const angle = -Math.PI / 2 + (Math.PI * 2 * index) / evaluationMetricKeys.length;
+          return (
+            <text key={label} x={center + Math.cos(angle) * 45} y={center + Math.sin(angle) * 45} textAnchor="middle">
+              {label}
+            </text>
+          );
+        })}
+        <polygon points={points} className="radar-value" />
+      </svg>
+    </div>
+  );
 }
 
 function ComboRelationshipGraph({
@@ -333,6 +490,7 @@ function HeroPickerModal({
   heroOptions,
   currentSlotHeroIds,
   heroDraftState,
+  evaluatedHeroIds,
   onClose,
   onPick
 }: {
@@ -341,6 +499,7 @@ function HeroPickerModal({
   heroOptions: HeroOption[];
   currentSlotHeroIds: Set<number>;
   heroDraftState: Map<number, HeroDraftState>;
+  evaluatedHeroIds: Set<number>;
   onClose: () => void;
   onPick: (heroId: number) => void;
 }) {
@@ -404,7 +563,7 @@ function HeroPickerModal({
                   <button
                     key={hero.heroId}
                     type="button"
-                    className={heroButtonClass(hero.heroId, currentSlotHeroIds, heroDraftState)}
+                    className={heroButtonClass(hero.heroId, currentSlotHeroIds, heroDraftState, false, evaluatedHeroIds.has(hero.heroId))}
                     title={`${hero.heroName} | ${formatNumber(hero.games)} games | ${hero.winrate}%`}
                     onClick={() => onPick(hero.heroId)}
                   >
@@ -572,6 +731,8 @@ export function DraftsPage() {
   const [draftOwnerKey, setDraftOwnerKey] = useState<string | null>(() => getLocalDraftOwnerKey());
   const [accessCodeInput, setAccessCodeInput] = useState(() => getLocalDraftOwnerKey() ?? "");
   const [accessCodeMessage, setAccessCodeMessage] = useState<string | null>(null);
+  const [teamImportMessage, setTeamImportMessage] = useState<string | null>(null);
+  const [customTeamName, setCustomTeamName] = useState("");
   const [newAccessCode, setNewAccessCode] = useState<string | null>(null);
   const [targetSlotId, setTargetSlotId] = useState<string | null>(null);
   const [pickerSlotId, setPickerSlotId] = useState<string | null>(null);
@@ -582,9 +743,24 @@ export function DraftsPage() {
   const deleteDraft = useDeleteDraftPlan();
   const heroStats = useHeroStats({ leagueId });
   const heroRoster = useHeroRoster();
+  const customTeams = useCustomTeams();
+  const importCustomTeam = useImportCustomTeamEvaluations();
   const selectedDraft = drafts.find((draft) => draft.id === selectedDraftId) ?? null;
-  const firstTeam = useLeagueTeam(leagueId, selectedDraft?.firstTeamId ?? null);
-  const secondTeam = useLeagueTeam(leagueId, selectedDraft?.secondTeamId ?? null);
+  const customTeamIds = useMemo(() => new Set((customTeams.data ?? []).map((team) => team.teamId)), [customTeams.data]);
+  const firstLeagueTeamId = selectedDraft?.firstTeamId && selectedDraft.firstTeamId > 0 ? selectedDraft.firstTeamId : null;
+  const secondLeagueTeamId = selectedDraft?.secondTeamId && selectedDraft.secondTeamId > 0 ? selectedDraft.secondTeamId : null;
+  const firstTeam = useLeagueTeam(leagueId, firstLeagueTeamId);
+  const secondTeam = useLeagueTeam(leagueId, secondLeagueTeamId);
+  const firstEvaluationTeamId =
+    selectedDraft?.firstTeamId && (selectedDraft.firstTeamId < 0 || customTeamIds.has(selectedDraft.firstTeamId))
+      ? selectedDraft.firstTeamId
+      : null;
+  const secondEvaluationTeamId =
+    selectedDraft?.secondTeamId && (selectedDraft.secondTeamId < 0 || customTeamIds.has(selectedDraft.secondTeamId))
+      ? selectedDraft.secondTeamId
+      : null;
+  const firstTeamEvaluations = useCustomTeamEvaluations(firstEvaluationTeamId);
+  const secondTeamEvaluations = useCustomTeamEvaluations(secondEvaluationTeamId);
   const firstTeamPlayerIds = useMemo(
     () =>
       (firstTeam.data?.players ?? [])
@@ -634,7 +810,13 @@ export function DraftsPage() {
     }
   }, [visibleDrafts, selectedDraftId]);
 
-  const teams = league.data?.teams ?? [];
+  const teams = useMemo<DraftTeamOption[]>(
+    () => [
+      ...(league.data?.teams ?? []).map((team) => ({ ...team, isCustom: false })),
+      ...(customTeams.data ?? []).map((team) => ({ teamId: team.teamId, name: team.name, tag: team.tag, isCustom: true }))
+    ],
+    [customTeams.data, league.data?.teams]
+  );
   const draftGroups = useMemo(() => groupDraftsByTeam(visibleDrafts, teams), [visibleDrafts, teams]);
   const leagueLibrarySections = useMemo(() => {
     const byLeague = new Map<number, DraftPlan[]>();
@@ -737,6 +919,34 @@ export function DraftsPage() {
     setAccessCodeMessage("Draft library refreshed for this access code.");
   };
 
+  const importEvaluationCsv = async (file: File | null) => {
+    if (!file) return;
+    const name = customTeamName.trim() || file.name.replace(/\.[^.]+$/, "");
+    try {
+      const rows = normalizeImportRows(parseCsvRows(await file.text()));
+      if (!rows.length) {
+        setTeamImportMessage("No CSV rows found.");
+        return;
+      }
+      const result = await importCustomTeam.mutateAsync({ name, rows });
+      setCustomTeamName(result.team.name);
+      setTeamImportMessage(
+        `Imported ${formatNumber(result.evaluations.length)} hero evaluations for ${result.team.name}.`
+      );
+      if (selectedDraft) {
+        const nextDraft =
+          selectedDraft.firstTeamId === null
+            ? { ...selectedDraft, firstTeamId: result.team.teamId }
+            : selectedDraft.secondTeamId === null
+              ? { ...selectedDraft, secondTeamId: result.team.teamId }
+              : selectedDraft;
+        if (nextDraft !== selectedDraft) updateDraft(nextDraft);
+      }
+    } catch (error) {
+      setTeamImportMessage(error instanceof Error ? error.message : "Failed to import CSV.");
+    }
+  };
+
   const updateSlot = (slotId: string, heroIds: number[]) => {
     if (!selectedDraft) return;
     updateDraft({
@@ -745,22 +955,28 @@ export function DraftsPage() {
     });
   };
 
-  const firstTeamHeroes = (firstTeam.data?.topHeroes ?? []).map((hero) => ({
-    heroId: hero.heroId,
-    heroName: hero.heroName,
-    heroIconUrl: hero.heroIconUrl,
-    primaryAttr: heroesById.get(hero.heroId)?.primaryAttr ?? null,
-    games: hero.games,
-    winrate: hero.winrate
-  }));
-  const secondTeamHeroes = (secondTeam.data?.topHeroes ?? []).map((hero) => ({
-    heroId: hero.heroId,
-    heroName: hero.heroName,
-    heroIconUrl: hero.heroIconUrl,
-    primaryAttr: heroesById.get(hero.heroId)?.primaryAttr ?? null,
-    games: hero.games,
-    winrate: hero.winrate
-  }));
+  const firstTeamHeroes =
+    firstTeamEvaluations.data?.evaluations.length
+      ? evaluationHeroOptions(firstTeamEvaluations.data.evaluations, heroesById)
+      : (firstTeam.data?.topHeroes ?? []).map((hero) => ({
+          heroId: hero.heroId,
+          heroName: hero.heroName,
+          heroIconUrl: hero.heroIconUrl,
+          primaryAttr: heroesById.get(hero.heroId)?.primaryAttr ?? null,
+          games: hero.games,
+          winrate: hero.winrate
+        }));
+  const secondTeamHeroes =
+    secondTeamEvaluations.data?.evaluations.length
+      ? evaluationHeroOptions(secondTeamEvaluations.data.evaluations, heroesById)
+      : (secondTeam.data?.topHeroes ?? []).map((hero) => ({
+          heroId: hero.heroId,
+          heroName: hero.heroName,
+          heroIconUrl: hero.heroIconUrl,
+          primaryAttr: heroesById.get(hero.heroId)?.primaryAttr ?? null,
+          games: hero.games,
+          winrate: hero.winrate
+        }));
   const pickerSlot = selectedDraft?.slots.find((slot) => slot.id === pickerSlotId) ?? null;
   const heroDraftState = useMemo(() => {
     const map = new Map<number, HeroDraftState>();
@@ -909,6 +1125,31 @@ export function DraftsPage() {
     ];
   }, [draftContext.data?.combos, firstTeam.data?.players, heroesById, league.data?.matchPlayers, secondTeam.data?.players]);
   const currentSlotHeroIds = useMemo(() => new Set(pickerSlot?.heroIds ?? []), [pickerSlot?.heroIds]);
+  const firstEvaluatedHeroIds = useMemo(
+    () => new Set((firstTeamEvaluations.data?.evaluations ?? []).map((entry) => entry.heroId).filter((id): id is number => id !== null)),
+    [firstTeamEvaluations.data?.evaluations]
+  );
+  const secondEvaluatedHeroIds = useMemo(
+    () => new Set((secondTeamEvaluations.data?.evaluations ?? []).map((entry) => entry.heroId).filter((id): id is number => id !== null)),
+    [secondTeamEvaluations.data?.evaluations]
+  );
+  const pickerEvaluatedHeroIds = pickerSlot?.side === "second" ? secondEvaluatedHeroIds : firstEvaluatedHeroIds;
+  const pickedHeroIdsBySide = useMemo(() => {
+    const bySide: Record<DraftSide, number[]> = { first: [], second: [] };
+    for (const slot of selectedDraft?.slots ?? []) {
+      if (slot.kind !== "pick") continue;
+      bySide[slot.side].push(...slot.heroIds);
+    }
+    return bySide;
+  }, [selectedDraft?.slots]);
+  const firstEvaluationMetrics = useMemo(
+    () => averageEvaluationMetrics(firstTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.first),
+    [firstTeamEvaluations.data?.evaluations, pickedHeroIdsBySide.first]
+  );
+  const secondEvaluationMetrics = useMemo(
+    () => averageEvaluationMetrics(secondTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.second),
+    [pickedHeroIdsBySide.second, secondTeamEvaluations.data?.evaluations]
+  );
 
   return (
     <Page title="Drafts">
@@ -960,6 +1201,28 @@ export function DraftsPage() {
           {league.isLoading || heroStats.isLoading || heroRoster.isLoading || draftPlans.isLoading ? (
             <LoadingState label="Loading draft context..." />
           ) : null}
+          <div className="draft-import-panel">
+            <label>
+              Team name
+              <input
+                value={customTeamName}
+                onChange={(event) => setCustomTeamName(event.target.value)}
+                placeholder="Create/import custom team"
+              />
+            </label>
+            <label className="draft-file-import">
+              Import hero evaluation CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(event) => {
+                  void importEvaluationCsv(event.target.files?.[0] ?? null);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            {teamImportMessage ? <small>{teamImportMessage}</small> : null}
+          </div>
           {newAccessCode ? (
             <div className="draft-access-modal-backdrop" role="presentation">
               <div className="draft-access-modal" role="dialog" aria-modal="true" aria-labelledby="draft-access-title">
@@ -987,6 +1250,7 @@ export function DraftsPage() {
                 heroOptions={heroOptions}
                 currentSlotHeroIds={currentSlotHeroIds}
                 heroDraftState={heroDraftState}
+                evaluatedHeroIds={pickerEvaluatedHeroIds}
                 onClose={() => setPickerSlotId(null)}
                 onPick={(heroId) => {
                   if (!pickerSlot) return;
@@ -1014,7 +1278,7 @@ export function DraftsPage() {
                       <option value="">No team assigned</option>
                       {teams.map((team) => (
                         <option key={team.teamId} value={team.teamId}>
-                          {team.name}
+                          {team.name}{team.isCustom ? " - custom" : ""}
                         </option>
                       ))}
                     </select>
@@ -1025,6 +1289,11 @@ export function DraftsPage() {
                     heroes={firstTeamHeroes}
                     comfortColumns={playerComfortColumns.filter((column) => column.side === "first")}
                     side="first"
+                  />
+                  <EvaluationRadar
+                    title="First side profile"
+                    metrics={firstEvaluationMetrics}
+                    emptyLabel="Pick evaluated heroes to see the team profile."
                   />
                 </div>
                 <div className="draft-sequence-board">
@@ -1114,7 +1383,7 @@ export function DraftsPage() {
                       <option value="">No team assigned</option>
                       {teams.map((team) => (
                         <option key={team.teamId} value={team.teamId}>
-                          {team.name}
+                          {team.name}{team.isCustom ? " - custom" : ""}
                         </option>
                       ))}
                     </select>
@@ -1125,6 +1394,11 @@ export function DraftsPage() {
                     heroes={secondTeamHeroes}
                     comfortColumns={playerComfortColumns.filter((column) => column.side === "second")}
                     side="second"
+                  />
+                  <EvaluationRadar
+                    title="Second side profile"
+                    metrics={secondEvaluationMetrics}
+                    emptyLabel="Pick evaluated heroes to see the team profile."
                   />
                 </div>
               </div>

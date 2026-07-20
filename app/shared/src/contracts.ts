@@ -819,6 +819,68 @@ export const draftContextSchema = z.object({
   combos: z.array(draftContextComboSchema)
 });
 
+export const customTeamSchema = z.object({
+  teamId: z.number(),
+  name: z.string(),
+  tag: z.string().nullable(),
+  isCustom: z.boolean(),
+  players: z.number(),
+  heroes: z.number(),
+  evaluations: z.number()
+});
+
+export const heroEvaluationMetricSchema = z.object({
+  save: z.number(),
+  control: z.number(),
+  enabler: z.number(),
+  mobility: z.number(),
+  teamfight: z.number(),
+  initiation: z.number(),
+  heroDamage: z.number(),
+  buildingDamage: z.number(),
+  farmDependency: z.number()
+});
+
+export const customTeamHeroEvaluationSchema = z.object({
+  teamId: z.number(),
+  playerKey: z.string(),
+  steamId: z.string().nullable(),
+  pseudonym: z.string(),
+  heroSlug: z.string(),
+  heroId: z.number().nullable(),
+  heroName: z.string(),
+  heroIconUrl: z.string().nullable(),
+  metrics: heroEvaluationMetricSchema
+});
+
+export const customTeamEvaluationsResponseSchema = z.object({
+  team: customTeamSchema,
+  evaluations: z.array(customTeamHeroEvaluationSchema)
+});
+
+export const customTeamImportRowSchema = z.object({
+  player_id: z.string().optional().nullable(),
+  steam_id: z.string().optional().nullable(),
+  pseudonym: z.string().min(1),
+  hero_id: z.string().min(1),
+  save: z.coerce.number().default(0),
+  control: z.coerce.number().default(0),
+  enabler: z.coerce.number().default(0),
+  mobility: z.coerce.number().default(0),
+  teamfight: z.coerce.number().default(0),
+  initiation: z.coerce.number().default(0),
+  hero_damage: z.coerce.number().default(0),
+  building_damage: z.coerce.number().default(0),
+  farm_dependency: z.coerce.number().default(0)
+});
+
+export const customTeamImportRequestSchema = z.object({
+  teamId: z.number().int().optional().nullable(),
+  name: z.string().min(1).max(120),
+  tag: z.string().max(24).optional().nullable(),
+  rows: z.array(customTeamImportRowSchema).min(1)
+});
+
 export const settingsSchema = z.object({
   openDotaApiKey: z.string().nullable(),
   stratzApiKey: z.string().nullable(),
@@ -877,3 +939,8 @@ export type SettingsPayload = z.infer<typeof settingsSchema>;
 export type PlayerCompareResponse = z.infer<typeof playerCompareSchema>;
 export type DraftPlanPayload = z.infer<typeof draftPlanSchema>;
 export type DraftContextResponse = z.infer<typeof draftContextSchema>;
+export type CustomTeam = z.infer<typeof customTeamSchema>;
+export type HeroEvaluationMetrics = z.infer<typeof heroEvaluationMetricSchema>;
+export type CustomTeamHeroEvaluation = z.infer<typeof customTeamHeroEvaluationSchema>;
+export type CustomTeamEvaluationsResponse = z.infer<typeof customTeamEvaluationsResponseSchema>;
+export type CustomTeamImportRequest = z.infer<typeof customTeamImportRequestSchema>;

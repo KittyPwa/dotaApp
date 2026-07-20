@@ -189,6 +189,42 @@ export const draftPlans = sqliteTable(
   })
 );
 
+export const customTeamHeroEvaluations = sqliteTable(
+  "custom_team_hero_evaluations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    teamId: integer("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    playerKey: text("player_key").notNull(),
+    steamId: text("steam_id"),
+    pseudonym: text("pseudonym").notNull(),
+    heroSlug: text("hero_slug").notNull(),
+    heroId: integer("hero_id").references(() => heroes.id, { onDelete: "set null" }),
+    save: integer("save").notNull().default(0),
+    control: integer("control").notNull().default(0),
+    enabler: integer("enabler").notNull().default(0),
+    mobility: integer("mobility").notNull().default(0),
+    teamfight: integer("teamfight").notNull().default(0),
+    initiation: integer("initiation").notNull().default(0),
+    heroDamage: integer("hero_damage").notNull().default(0),
+    buildingDamage: integer("building_damage").notNull().default(0),
+    farmDependency: integer("farm_dependency").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`)
+  },
+  (table) => ({
+    teamPlayerHeroUnique: uniqueIndex("custom_team_hero_evaluations_team_player_hero_unique").on(
+      table.teamId,
+      table.playerKey,
+      table.heroSlug
+    ),
+    teamHeroIdx: index("custom_team_hero_evaluations_team_hero_idx").on(table.teamId, table.heroId)
+  })
+);
+
 export const rawApiPayloads = sqliteTable(
   "raw_api_payloads",
   {
@@ -275,6 +311,7 @@ export const schema = {
   leagues,
   drafts,
   draftPlans,
+  customTeamHeroEvaluations,
   rawApiPayloads,
   settings,
   providerRequestEvents,

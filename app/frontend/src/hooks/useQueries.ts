@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CommunityGraph,
+  CustomTeam,
+  CustomTeamEvaluationsResponse,
+  CustomTeamImportRequest,
   DraftContextResponse,
   DashboardResponse,
   DraftPlanPayload,
@@ -177,6 +180,34 @@ export function useDraftContext(firstPlayerIds: number[], secondPlayerIds: numbe
     queryKey: ["draft-context", firstIds.join(","), secondIds.join(",")],
     queryFn: () => apiGet<DraftContextResponse>(`/api/draft-context${suffix ? `?${suffix}` : ""}`),
     enabled: firstIds.length > 0 || secondIds.length > 0
+  });
+}
+
+export function useCustomTeams() {
+  return useQuery({
+    queryKey: ["custom-teams"],
+    queryFn: () => apiGet<CustomTeam[]>("/api/custom-teams")
+  });
+}
+
+export function useCustomTeamEvaluations(teamId: number | null) {
+  return useQuery({
+    queryKey: ["custom-team-evaluations", teamId],
+    queryFn: () => apiGet<CustomTeamEvaluationsResponse>(`/api/custom-teams/${teamId}/evaluations`),
+    enabled: teamId !== null
+  });
+}
+
+export function useImportCustomTeamEvaluations() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: CustomTeamImportRequest) =>
+      apiPost<CustomTeamEvaluationsResponse>("/api/custom-teams/import-evaluations", payload),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["custom-teams"] });
+      await queryClient.invalidateQueries({ queryKey: ["custom-team-evaluations", result.team.teamId] });
+    }
   });
 }
 
