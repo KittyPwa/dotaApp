@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CommunityGraph,
   CustomTeam,
+  CustomTeamCreateRequest,
   CustomTeamEvaluationsResponse,
   CustomTeamImportRequest,
   DraftContextResponse,
@@ -195,6 +196,17 @@ export function useCustomTeamEvaluations(teamId: number | null) {
     queryKey: ["custom-team-evaluations", teamId],
     queryFn: () => apiGet<CustomTeamEvaluationsResponse>(`/api/custom-teams/${teamId}/evaluations`),
     enabled: teamId !== null
+  });
+}
+
+export function useCreateCustomTeam() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: CustomTeamCreateRequest) => apiPost<CustomTeam>("/api/custom-teams", payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["custom-teams"] });
+    }
   });
 }
 

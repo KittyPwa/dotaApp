@@ -8,6 +8,7 @@ import { Page } from "../components/Page";
 import { EmptyState, LoadingState } from "../components/State";
 import {
   useDeleteDraftPlan,
+  useCreateCustomTeam,
   useCustomTeamEvaluations,
   useCustomTeams,
   useDraftContext,
@@ -138,8 +139,11 @@ function parseCsvRows(text: string): Record<string, string>[] {
   );
 }
 
-function averageEvaluationMetrics(evaluations: CustomTeamHeroEvaluation[], heroIds: number[]) {
-  const selected = evaluations.filter((entry) => entry.heroId !== null && heroIds.includes(entry.heroId));
+function sumEvaluationMetrics(evaluations: CustomTeamHeroEvaluation[], heroIds: number[]) {
+  const uniqueHeroIds = [...new Set(heroIds)];
+  const selected = uniqueHeroIds
+    .map((heroId) => evaluations.find((entry) => entry.heroId === heroId))
+    .filter((entry): entry is CustomTeamHeroEvaluation => Boolean(entry));
   if (!selected.length) return null;
   const totals = Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, 0])) as Record<keyof HeroEvaluationMetrics, number>;
   for (const evaluation of selected) {
@@ -147,7 +151,7 @@ function averageEvaluationMetrics(evaluations: CustomTeamHeroEvaluation[], heroI
       totals[key] += evaluation.metrics[key];
     }
   }
-  return Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, Number((totals[key] / selected.length).toFixed(1))])) as HeroEvaluationMetrics;
+  return Object.fromEntries(evaluationMetricKeys.map(({ key }) => [key, Number(totals[key].toFixed(1))])) as HeroEvaluationMetrics;
 }
 
 function evaluationHeroOptions(evaluations: CustomTeamHeroEvaluation[], heroesById: Map<number, HeroOption>): HeroOption[] {
@@ -284,7 +288,7 @@ function EvaluationRadar({ title, metrics, emptyLabel }: { title: string; metric
   const points = evaluationMetricKeys
     .map(({ key }, index) => {
       const angle = -Math.PI / 2 + (Math.PI * 2 * index) / evaluationMetricKeys.length;
-      const valueRadius = radius * Math.max(0, Math.min(5, metrics[key])) / 5;
+      const valueRadius = radius * Math.max(0, Math.min(25, metrics[key])) / 25;
       return `${center + Math.cos(angle) * valueRadius},${center + Math.sin(angle) * valueRadius}`;
     })
     .join(" ");
@@ -313,6 +317,7 @@ function EvaluationRadar({ title, metrics, emptyLabel }: { title: string; metric
         })}
         <polygon points={points} className="radar-value" />
       </svg>
+      <small>Sum of unique selected evaluated heroes, capped at 25.</small>
     </div>
   );
 }
@@ -733,6 +738,7 @@ export function DraftsPage() {
   const [accessCodeMessage, setAccessCodeMessage] = useState<string | null>(null);
   const [teamImportMessage, setTeamImportMessage] = useState<string | null>(null);
   const [customTeamName, setCustomTeamName] = useState("");
+  const [draftSection, setDraftSection] = useState<"drafts" | "teams">("drafts");
   const [newAccessCode, setNewAccessCode] = useState<string | null>(null);
   const [targetSlotId, setTargetSlotId] = useState<string | null>(null);
   const [pickerSlotId, setPickerSlotId] = useState<string | null>(null);
@@ -744,6 +750,7 @@ export function DraftsPage() {
   const heroStats = useHeroStats({ leagueId });
   const heroRoster = useHeroRoster();
   const customTeams = useCustomTeams();
+  const createCustomTeam = useCreateCustomTeam();
   const importCustomTeam = useImportCustomTeamEvaluations();
   const selectedDraft = drafts.find((draft) => draft.id === selectedDraftId) ?? null;
   const customTeamIds = useMemo(() => new Set((customTeams.data ?? []).map((team) => team.teamId)), [customTeams.data]);
@@ -947,6 +954,21 @@ export function DraftsPage() {
     }
   };
 
+  const createCustomTeamFromName = async () => {
+    const name = customTeamName.trim();
+    if (!name) {
+      setTeamImportMessage("Enter a team name first.");
+      return;
+    }
+    try {
+      const team = await createCustomTeam.mutateAsync({ name });
+      setCustomTeamName(team.name);
+      setTeamImportMessage(`Created ${team.name}.`);
+    } catch (error) {
+      setTeamImportMessage(error instanceof Error ? error.message : "Failed to create team.");
+    }
+  };
+
   const updateSlot = (slotId: string, heroIds: number[]) => {
     if (!selectedDraft) return;
     updateDraft({
@@ -1143,11 +1165,11 @@ export function DraftsPage() {
     return bySide;
   }, [selectedDraft?.slots]);
   const firstEvaluationMetrics = useMemo(
-    () => averageEvaluationMetrics(firstTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.first),
+    () => sumEvaluationMetrics(firstTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.first),
     [firstTeamEvaluations.data?.evaluations, pickedHeroIdsBySide.first]
   );
   const secondEvaluationMetrics = useMemo(
-    () => averageEvaluationMetrics(secondTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.second),
+    () => sumEvaluationMetrics(secondTeamEvaluations.data?.evaluations ?? [], pickedHeroIdsBySide.second),
     [pickedHeroIdsBySide.second, secondTeamEvaluations.data?.evaluations]
   );
 
@@ -1197,32 +1219,29 @@ export function DraftsPage() {
           </section>
         ) : null}
 
+        {!selectedDraft ? (
+          <div className="draft-section-tabs" role="tablist" aria-label="Draft sections">
+            <button
+              type="button"
+              className={draftSection === "drafts" ? "active" : ""}
+              onClick={() => setDraftSection("drafts")}
+            >
+              Drafts
+            </button>
+            <button
+              type="button"
+              className={draftSection === "teams" ? "active" : ""}
+              onClick={() => setDraftSection("teams")}
+            >
+              Teams
+            </button>
+          </div>
+        ) : null}
+
         <section className="draft-main">
           {league.isLoading || heroStats.isLoading || heroRoster.isLoading || draftPlans.isLoading ? (
             <LoadingState label="Loading draft context..." />
           ) : null}
-          <div className="draft-import-panel">
-            <label>
-              Team name
-              <input
-                value={customTeamName}
-                onChange={(event) => setCustomTeamName(event.target.value)}
-                placeholder="Create/import custom team"
-              />
-            </label>
-            <label className="draft-file-import">
-              Import hero evaluation CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={(event) => {
-                  void importEvaluationCsv(event.target.files?.[0] ?? null);
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
-            {teamImportMessage ? <small>{teamImportMessage}</small> : null}
-          </div>
           {newAccessCode ? (
             <div className="draft-access-modal-backdrop" role="presentation">
               <div className="draft-access-modal" role="dialog" aria-modal="true" aria-labelledby="draft-access-title">
@@ -1436,6 +1455,87 @@ export function DraftsPage() {
                 </Card>
               </div>
             </>
+          ) : draftSection === "teams" ? (
+            <Card
+              title="Teams"
+              extra={
+                <button
+                  type="button"
+                  onClick={() => void createCustomTeamFromName()}
+                  disabled={createCustomTeam.isPending || !customTeamName.trim()}
+                >
+                  Add team
+                </button>
+              }
+            >
+              <div className="draft-team-tools">
+                <label>
+                  Team name
+                  <input
+                    value={customTeamName}
+                    onChange={(event) => setCustomTeamName(event.target.value)}
+                    placeholder="Custom team name"
+                  />
+                </label>
+                <label className="draft-file-import">
+                  Import hero evaluation CSV
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(event) => {
+                      void importEvaluationCsv(event.target.files?.[0] ?? null);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                {teamImportMessage ? <small>{teamImportMessage}</small> : null}
+              </div>
+
+              <div className="draft-team-directory">
+                {(customTeams.data ?? []).length ? (
+                  <section>
+                    <h3>Custom teams</h3>
+                    <div className="draft-team-grid">
+                      {(customTeams.data ?? []).map((team) => (
+                        <article key={team.teamId} className="draft-team-card custom">
+                          <strong>{team.name}</strong>
+                          <span>{team.tag ?? "Custom"}</span>
+                          <small>
+                            {formatNumber(team.evaluations)} evaluations · {formatNumber(team.heroes)} heroes ·{" "}
+                            {formatNumber(team.players)} players
+                          </small>
+                          <button type="button" className="ghost-button compact" onClick={() => void createDraft({ firstTeamId: team.teamId })}>
+                            Draft with team
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : (
+                  <EmptyState label="No custom teams yet." />
+                )}
+
+                {league.data?.teams.length ? (
+                  <section>
+                    <h3>League teams</h3>
+                    <div className="draft-team-grid">
+                      {league.data.teams.map((team) => (
+                        <article key={team.teamId} className="draft-team-card">
+                          <strong>{team.name}</strong>
+                          <span>{team.tag ?? `Team ${team.teamId}`}</span>
+                          <small>
+                            {formatNumber(team.games)} games · {team.winrate.toFixed(1)}% winrate
+                          </small>
+                          <button type="button" className="ghost-button compact" onClick={() => void createDraft({ firstTeamId: team.teamId })}>
+                            Draft with team
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+            </Card>
           ) : (
             <Card title="Draft library">
               <div className="draft-library-toolbar">

@@ -881,6 +881,11 @@ export const customTeamImportRequestSchema = z.object({
   rows: z.array(customTeamImportRowSchema).min(1)
 });
 
+export const customTeamCreateRequestSchema = z.object({
+  name: z.string().min(1).max(120),
+  tag: z.string().max(24).optional().nullable()
+});
+
 export const settingsSchema = z.object({
   openDotaApiKey: z.string().nullable(),
   stratzApiKey: z.string().nullable(),
@@ -944,3 +949,4 @@ export type HeroEvaluationMetrics = z.infer<typeof heroEvaluationMetricSchema>;
 export type CustomTeamHeroEvaluation = z.infer<typeof customTeamHeroEvaluationSchema>;
 export type CustomTeamEvaluationsResponse = z.infer<typeof customTeamEvaluationsResponseSchema>;
 export type CustomTeamImportRequest = z.infer<typeof customTeamImportRequestSchema>;
+export type CustomTeamCreateRequest = z.infer<typeof customTeamCreateRequestSchema>;

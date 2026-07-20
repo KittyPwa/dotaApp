@@ -3,6 +3,7 @@ import { alias } from "drizzle-orm/sqlite-core";
 import type {
   CommunityGraph,
   CustomTeam,
+  CustomTeamCreateRequest,
   CustomTeamEvaluationsResponse,
   CustomTeamImportRequest,
   DraftContextResponse,
@@ -3301,6 +3302,24 @@ export class DotaDataService {
       .all() as Array<{ teamId: number; name: string; tag: string | null; evaluations: number; players: number; heroes: number }>;
 
     return rows.map((row) => ({ ...row, isCustom: row.teamId < 0 }));
+  }
+
+  async createCustomTeam(input: CustomTeamCreateRequest): Promise<CustomTeam> {
+    const now = new Date();
+    const teamId = -Date.now();
+    const name = input.name.trim();
+    const tag = input.tag?.trim() || null;
+    await db.insert(teams).values({ id: teamId, name, tag, updatedAt: now });
+
+    return {
+      teamId,
+      name,
+      tag,
+      isCustom: true,
+      players: 0,
+      heroes: 0,
+      evaluations: 0
+    };
   }
 
   async importCustomTeamEvaluations(input: CustomTeamImportRequest): Promise<CustomTeamEvaluationsResponse> {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { customTeamImportRequestSchema, draftPlanSchema, settingsSchema } from "@dota/shared";
+import { customTeamCreateRequestSchema, customTeamImportRequestSchema, draftPlanSchema, settingsSchema } from "@dota/shared";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
@@ -246,6 +246,15 @@ export async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : "Failed to load custom teams." };
+    }
+  });
+
+  app.post("/api/custom-teams", async (request, reply) => {
+    try {
+      return await service.createCustomTeam(customTeamCreateRequestSchema.parse(request.body));
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : "Failed to create custom team." };
     }
   });
 

@@ -1170,7 +1170,29 @@ tbody tr.league-row-dire {
   align-self: center;
 }
 
-.draft-import-panel {
+.draft-section-tabs {
+  display: inline-flex;
+  gap: 0.4rem;
+  width: fit-content;
+  padding: 0.3rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.draft-section-tabs button {
+  padding: 0.55rem 0.9rem;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.draft-section-tabs button.active {
+  color: var(--text);
+  background: var(--soft-bg);
+}
+
+.draft-team-tools {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr) minmax(220px, 1.2fr);
   gap: 0.75rem;
@@ -1182,12 +1204,58 @@ tbody tr.league-row-dire {
   background: var(--panel);
 }
 
-.draft-import-panel small {
+.draft-team-tools small {
   color: var(--muted);
 }
 
 .draft-file-import input {
   padding: 0.55rem;
+}
+
+.draft-team-directory {
+  display: grid;
+  gap: 1rem;
+}
+
+.draft-team-directory section {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.draft-team-directory h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.draft-team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.draft-team-card {
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+  padding: 0.75rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--soft-bg);
+}
+
+.draft-team-card.custom {
+  border-color: rgba(51, 211, 153, 0.35);
+  background: rgba(51, 211, 153, 0.08);
+}
+
+.draft-team-card span,
+.draft-team-card small {
+  color: var(--muted);
+}
+
+.draft-team-card button {
+  justify-self: start;
+  margin-top: 0.25rem;
 }
 
 .draft-access-modal-backdrop {
